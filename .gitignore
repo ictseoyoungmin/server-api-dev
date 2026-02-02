@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Environments
+.env
+.env.*
+.envqd/
+.venv/
+venv/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Local data / artifacts
+/data/
+/qdrant_storage/
+/weights/
+/models_cache/
+/snapshots/
+
+# Runtime markers
+.qdrant-initialized
+
+# OS
+.DS_Store
+Thumbs.db
