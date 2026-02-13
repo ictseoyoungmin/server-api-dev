@@ -154,3 +154,90 @@ Notes:
 - Binary response is a framed format `dogface-batch-v1`:
   - `uint32 N`, `uint32 D`, `uint8 dtype_code (1=float32, 2=float16)`, then `N*D` values.
 - Headers include `X-Embedding-Count`, `X-Embedding-Dim`, `X-Embedding-DType`, `X-Model-Version`, `X-Batch-Format`.
+
+## 8) Sync Facebank Images (hash-based dedupe)
+`GET /v1/sync-images`
+
+Query:
+- `petId` (required)
+- `petName` (optional): name used for server-side folder grouping
+- `facebankId` (required)
+- `facebankVersion` (optional, default latest)
+- `hashes` (required): CSV list of sha256 hashes
+
+Response:
+```json
+{"existing_hashes": ["hash1", "hash3"]}
+```
+
+`POST /v1/sync-images`
+
+**Content-Type**: `multipart/form-data`
+
+Fields:
+- `petId` (required)
+- `petName` (required)
+- `facebankId` (required)
+- `facebankVersion` (required, int)
+- `images` (required, repeated): image files
+- `hashes` (required, repeated): sha256 for each image
+- `modelVersion` (optional)
+- `embeddingDim` (optional, int)
+- `threshold` (optional, float)
+- `deviceId` (optional)
+- `createdAt` (optional, ISO8601)
+
+Response:
+```json
+{
+  "pet_id": "pet_123",
+  "facebank_id": "fb_abc",
+  "facebank_version": 2,
+  "received": 5,
+  "skipped": 2,
+  "stored": 3,
+  "existing_hashes": ["hash1", "hash3"],
+  "model_version": "miewid",
+  "embedding_dim": 1024,
+  "threshold": 0.42,
+  "device_id": "pixel8"
+}
+```
+
+Storage (PoC):
+- `storage_dir/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/images/*`
+- `storage_dir/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/hash_index.json`
+- `storage_dir/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/facebank_meta.json`
+
+## 9) Verification Trials (TP/FP/FN/TN logging)
+`POST /v1/trials`
+
+**Content-Type**: `multipart/form-data`
+
+Fields:
+- `id` (required): trial UUID (idempotency key)
+- `petId` (required)
+- `petName` (optional): name used for server-side folder grouping
+- `facebankId` (required)
+- `facebankVersion` (required, int)
+- `score` (required, float)
+- `isSuccess` (required, bool)
+- `userFeedback` (required, bool)
+- `timestamp` (optional, ISO8601)
+- `pose` (optional, string)
+- `trialImage` (required): image file
+
+Response:
+```json
+{
+  "trial_id": "trial_uuid",
+  "status": "stored",
+  "stored": true,
+  "storage_path": "data/trials/2026-02-06/trial_uuid.json",
+  "outcome": "TP"
+}
+```
+
+Storage (PoC):
+- `storage_dir/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.json`
+- `storage_dir/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.jpg`

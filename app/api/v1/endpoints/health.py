@@ -1,3 +1,5 @@
+"""서비스 및 임베딩 모델 상태를 점검하는 헬스체크 엔드포인트 모듈."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Request

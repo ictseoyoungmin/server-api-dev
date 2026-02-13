@@ -1,3 +1,5 @@
+"""벡터 유사도 검색으로 후보 이미지를 조회하는 엔드포인트 모듈."""
+
 from __future__ import annotations
 
 from datetime import datetime

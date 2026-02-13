@@ -1,3 +1,5 @@
+"""인스턴스에 pet 라벨 정보를 기록하는 엔드포인트 모듈."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone

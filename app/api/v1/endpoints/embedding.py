@@ -1,3 +1,5 @@
+"""단일/배치 이미지 임베딩 생성을 제공하는 엔드포인트 모듈."""
+
 from __future__ import annotations
 
 import struct

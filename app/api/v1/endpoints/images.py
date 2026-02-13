@@ -1,3 +1,5 @@
+"""저장된 이미지 목록/원본/메타를 제공하는 엔드포인트 모듈."""
+
 from __future__ import annotations
 
 import json

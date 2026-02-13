@@ -1,3 +1,5 @@
+"""이미지 업로드, 탐지, 임베딩, 저장 파이프라인을 처리하는 엔드포인트 모듈."""
+
 from __future__ import annotations
 
 import json

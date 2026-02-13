@@ -8,7 +8,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-.cache/
+.cache*/
 
 # Environments
 .env
@@ -35,3 +35,4 @@ venv/
 Thumbs.db
 
 */*/weights/
+results
