@@ -18,6 +18,13 @@ class SearchHit:
     payload: Dict[str, Any]
 
 
+@dataclass(frozen=True)
+class PointRecord:
+    point_id: str
+    vector: Optional[List[float]]
+    payload: Dict[str, Any]
+
+
 class QdrantStore:
     def __init__(
         self,
@@ -152,6 +159,32 @@ class QdrantStore:
         for r in res.points:
             hits.append(SearchHit(point_id=str(r.id), score=float(r.score), payload=r.payload or {}))
         return hits
+
+    def scroll_points(
+        self,
+        query_filter: Optional[qm.Filter] = None,
+        limit: int = 1000,
+        with_vectors: bool = False,
+    ) -> List[PointRecord]:
+        out: List[PointRecord] = []
+        next_offset = None
+        while True:
+            points, next_offset = self.client.scroll(
+                collection_name=self.collection,
+                scroll_filter=query_filter,
+                limit=int(limit),
+                with_payload=True,
+                with_vectors=with_vectors,
+                offset=next_offset,
+            )
+            for p in points:
+                vec = None
+                if p.vector is not None:
+                    vec = list(p.vector)  # type: ignore[arg-type]
+                out.append(PointRecord(point_id=str(p.id), vector=vec, payload=p.payload or {}))
+            if next_offset is None:
+                break
+        return out
 
 
 def build_filter(

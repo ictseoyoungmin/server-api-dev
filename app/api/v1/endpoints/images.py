@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import mimetypes
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -48,13 +49,52 @@ def _build_item(meta: dict) -> GalleryImageItem:
     )
 
 
+def _meta_day_utc(meta: dict) -> str:
+    img = meta.get("image") or {}
+    ts = img.get("captured_at_ts") or img.get("uploaded_at_ts")
+    try:
+        return datetime.fromtimestamp(int(ts), tz=timezone.utc).date().isoformat()
+    except Exception:
+        return ""
+
+
+def _is_unclassified(meta: dict) -> bool:
+    instances = meta.get("instances") or []
+    if not instances:
+        return True
+    for i in instances:
+        if (i.get("assignment_status") == "ACCEPTED") and i.get("pet_id"):
+            continue
+        return True
+    return False
+
+
+def _matches_tab(meta: dict, tab: Literal["ALL", "UNCLASSIFIED", "PET"], pet_id: Optional[str]) -> bool:
+    if tab == "ALL":
+        return True
+    if tab == "UNCLASSIFIED":
+        return _is_unclassified(meta)
+    instances = meta.get("instances") or []
+    return any((i.get("assignment_status") == "ACCEPTED") and (i.get("pet_id") == pet_id) for i in instances)
+
+
 @router.get("/images", response_model=ImagesListResponse)
 def list_images(
     daycare_id: str = Query(...),
+    date: Optional[str] = Query(default=None, description="UTC date filter (YYYY-MM-DD)"),
+    tab: Literal["ALL", "UNCLASSIFIED", "PET"] = Query(default="ALL"),
+    pet_id: Optional[str] = Query(default=None),
     limit: int = Query(default=200, ge=1, le=2000),
     offset: int = Query(default=0, ge=0),
 ):
     """List server-stored images (PoC local storage)."""
+    if date:
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid date: {date}. Expected YYYY-MM-DD") from e
+    if tab == "PET" and not pet_id:
+        raise HTTPException(status_code=400, detail="pet_id is required when tab=PET")
 
     meta_dir = Path(settings.storage_dir) / "meta"
     meta_dir.mkdir(parents=True, exist_ok=True)
@@ -65,6 +105,10 @@ def list_images(
             meta = json.loads(p.read_text(encoding="utf-8"))
             img = meta.get("image") or {}
             if str(img.get("daycare_id")) != daycare_id:
+                continue
+            if date and _meta_day_utc(meta) != date:
+                continue
+            if not _matches_tab(meta, tab, pet_id):
                 continue
             metas.append(meta)
         except Exception:

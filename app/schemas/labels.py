@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field
 
 class LabelAssignment(BaseModel):
     instance_id: str
-    pet_id: str
+    pet_id: Optional[str] = None
+    action: Literal["ACCEPT", "REJECT", "CLEAR"] = "ACCEPT"
+    reason: Optional[str] = None
     source: Literal["MANUAL", "AUTO", "PROPAGATED"] = "MANUAL"
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
@@ -21,7 +23,8 @@ class LabelRequest(BaseModel):
 
 class LabelResponseItem(BaseModel):
     instance_id: str
-    pet_id: str
+    pet_id: Optional[str] = None
+    assignment_status: Literal["UNREVIEWED", "ACCEPTED", "REJECTED"]
     updated: bool
 
 

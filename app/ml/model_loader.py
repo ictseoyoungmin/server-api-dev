@@ -9,7 +9,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 
-def load_embedding_model(model_name: str, cache_dir: Path) -> torch.nn.Module:
+def load_embedding_model(model_name: str, cache_dir: Path, miewid_model_source: str = "conservationxlabs/miewid-msv3") -> torch.nn.Module:
     """Load an embedding model.
 
     Supported:
@@ -30,7 +30,7 @@ def load_embedding_model(model_name: str, cache_dir: Path) -> torch.nn.Module:
         logger.info("Loading miewid model from HuggingFace (cached at %s)", cache_dir)
         # trust_remote_code=True is needed by the model repo.
         model = AutoModel.from_pretrained(
-            "conservationxlabs/miewid-msv3",
+            miewid_model_source,
             trust_remote_code=True,
             cache_dir=str(cache_dir),
         )

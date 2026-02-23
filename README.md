@@ -188,3 +188,15 @@ Use `--hard` to delete the collection itself:
 - `MAX_CONCURRENCY`: set to 1~2 to avoid GPU OOM.
 - `MAX_BATCH_SIZE`: 8~32 is usually reasonable.
 - `HF_CACHE_DIR`: mount a persistent volume to avoid re-downloading weights.
+
+### Use finetuned MiewID checkpoint (optional)
+By default server loads baseline HF model (`conservationxlabs/miewid-msv3`).
+To use your finetuned checkpoint (`backbone+embed+bn`) from `MiewID/src`, set:
+
+```bash
+export MODEL_NAME=miewid
+export MIEWID_MODEL_SOURCE=conservationxlabs/miewid-msv3
+export MIEWID_FINETUNE_CKPT_PATH=/workspace/MiewID/src/outputs/train/ft_v2/checkpoints/ep25-val0.5721-miewidv3.ckpt
+```
+
+Then restart API. `GET /v1/health` will show `model_version` including ckpt filename when loaded.

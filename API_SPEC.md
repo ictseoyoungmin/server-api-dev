@@ -1,5 +1,8 @@
 # API Spec (PoC)
 
+Related design:
+- `SEMI_AUTO_CLASSIFICATION_DESIGN.md` (semi-auto daycare workflow extension plan)
+
 Base URL (default):
 - Scripted run: `http://<host>:8001` (see `run_api.sh`)
 - Docker Compose: `http://<host>:8000` (see `docker-compose.yml`)
@@ -74,13 +77,25 @@ Notes:
 {
   "daycare_id": "dc_001",
   "assignments": [
-    {"instance_id": "ins_...", "pet_id": "pet_aaa", "source": "MANUAL", "confidence": 1.0}
+    {
+      "instance_id": "ins_...",
+      "action": "ACCEPT",
+      "pet_id": "pet_aaa",
+      "source": "MANUAL",
+      "confidence": 1.0
+    }
   ]
 }
 ```
 
 For this PoC, labels are stored in Qdrant payload (`pet_id`, `label_source`, etc.).
+`action`:
+- `ACCEPT`: requires `pet_id`, writes `assignment_status=ACCEPTED`
+- `REJECT`: clears `pet_id`, writes `assignment_status=REJECTED`
+- `CLEAR`: clears decision, writes `assignment_status=UNREVIEWED`
+
 Note:
+- Label updates also sync corresponding local sidecar meta JSON instance fields.
 - `daycare_id` is currently accepted in the request but not enforced server-side for label writes.
 
 ## 5) Images (gallery)
@@ -88,6 +103,9 @@ Note:
 
 Query:
 - `daycare_id` (required)
+- `date` (optional): `YYYY-MM-DD` (UTC date filter)
+- `tab` (optional): `ALL | UNCLASSIFIED | PET` (default `ALL`)
+- `pet_id` (required when `tab=PET`)
 - `limit` (optional, default 200)
 - `offset` (optional, default 0)
 
@@ -100,7 +118,100 @@ Response:
 Returns image meta + detected instances (bbox, class_id, etc.).
 Note:
 - Image/instance metadata is read from local JSON sidecars created at ingest time.
-- Label updates via `/v1/labels` are stored in Qdrant payload and are not reflected in these JSON sidecars.
+- Label updates via `/v1/labels` are written to Qdrant payload and mirrored to these JSON sidecars.
+
+## 5.0) Pets (for PET tab selector)
+`GET /v1/pets`
+
+Query:
+- `daycare_id` (required)
+
+Response:
+- `items[]`: `pet_id`, `pet_name`, `image_count`, `instance_count`
+
+Notes:
+- Primary source is labeled instances in `storage_dir/meta/*.json` filtered by `daycare_id`.
+- `pet_name` is resolved from `storage_dir/pets/{pet_id}/{pet_name}` when available.
+- For PoC fallback, pets existing under `storage_dir/pets` are included even if counts are zero.
+
+## 5.1) Auto Classification (date scope)
+`POST /v1/classify/auto`
+
+**Content-Type**: `application/json`
+
+```json
+{
+  "daycare_id": "dc_001",
+  "date": "2026-02-13",
+  "auto_accept_threshold": 0.78,
+  "candidate_threshold": 0.62,
+  "search_limit": 200,
+  "dry_run": false
+}
+```
+
+Behavior:
+- Target: instances on the given date that are not `assignment_status=ACCEPTED` and have no `pet_id`.
+- Exemplar pool: labeled instances in the same daycare (`pet_id` exists; `assignment_status` is empty or `ACCEPTED`).
+- Decision:
+  - `score >= auto_accept_threshold`: write `pet_id`, `assignment_status=ACCEPTED`
+  - `candidate_threshold <= score < auto_accept_threshold`: write candidate only (`auto_pet_id`, `assignment_status=UNREVIEWED`)
+  - below threshold: keep `UNREVIEWED`
+- When `dry_run=true`, no payload/sidecar updates are written.
+
+## 5.2) Similar Search In Current Tab
+`POST /v1/classify/similar`
+
+**Content-Type**: `application/json`
+
+```json
+{
+  "daycare_id": "dc_001",
+  "date": "2026-02-13",
+  "tab": "UNCLASSIFIED",
+  "query_instance_ids": ["ins_..."],
+  "merge": "RRF",
+  "top_k_images": 200,
+  "per_query_limit": 400
+}
+```
+
+Behavior:
+- Uses the selected query instances as exemplars.
+- Candidate set is restricted to images currently visible in tab scope:
+  - `ALL`
+  - `UNCLASSIFIED`
+  - `PET` (`pet_id` required)
+- Returns tab-local image ranking by similarity score.
+- Each result also includes `raw_url` and `thumb_url` for direct gallery rendering.
+
+## 5.3) Finalize Daily Buckets
+`POST /v1/buckets/finalize`
+
+**Content-Type**: `application/json`
+
+```json
+{
+  "daycare_id": "dc_001",
+  "date": "2026-02-13",
+  "pet_ids": ["pet_a", "pet_b"]
+}
+```
+
+Behavior:
+- Scans accepted assignments (`assignment_status=ACCEPTED`) on that day.
+- Builds `pet_id -> image_ids[]` mapping.
+- Persists manifest JSON under:
+  - `storage_dir/buckets/{daycare_id}/{YYYY-MM-DD}/finalize_*.json`
+- Response/manifest includes `quality_metrics`:
+  - `total_day_images`, `unclassified_images`, `unclassified_image_ratio`
+  - `total_instances`, `accepted_instances`, `accepted_auto_instances`
+  - `unreviewed_instances`, `rejected_instances`, `auto_accept_ratio`
+
+`GET /v1/buckets/{daycare_id}/{day}`
+
+Query:
+- `manifest` (optional): explicit manifest filename. If omitted, latest manifest is returned.
 
 ## 6) Embed (single image, no DB write)
 `POST /v1/embed`

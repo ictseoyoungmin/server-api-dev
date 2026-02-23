@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torch.nn as nn
 from PIL import Image
 
 from app.core.config import Settings
@@ -37,9 +39,18 @@ class Embedder:
         self.device = self._resolve_device(settings.device)
         self.spec: ModelSpec = get_model_spec(settings.model_name, settings.input_size)
 
-        self.model = load_embedding_model(settings.model_name, settings.hf_cache_dir)
+        self.model = load_embedding_model(
+            settings.model_name,
+            settings.hf_cache_dir,
+            miewid_model_source=settings.miewid_model_source,
+        )
         self.model.eval()
         self.model.to(self.device)
+        self.proj_embed: Optional[nn.Linear] = None
+        self.proj_bn: Optional[nn.BatchNorm1d] = None
+        self._finetuned = False
+        self._finetune_ckpt_name: Optional[str] = None
+        self._try_load_miewid_finetune_ckpt()
 
         self.semaphore = asyncio.Semaphore(settings.max_concurrency)
 
@@ -50,7 +61,11 @@ class Embedder:
 
         self.model_info = ModelInfo(
             model_name=settings.model_name,
-            model_version=settings.model_name,  # PoC: treat model_name as version
+            model_version=(
+                f"{settings.model_name}+{self._finetune_ckpt_name}"
+                if self._finetuned and self._finetune_ckpt_name
+                else settings.model_name
+            ),
             input_size=self.spec.input_size,
         )
 
@@ -108,7 +123,70 @@ class Embedder:
         if isinstance(out, (list, tuple)):
             return out[0]
 
+        if self._finetuned and self.proj_embed is not None and self.proj_bn is not None:
+            if out.ndim > 2:
+                out = torch.flatten(out, 1)
+            out = self.proj_bn(self.proj_embed(out))
         return out
+
+    @staticmethod
+    def _strip_prefix(state: dict, prefix: str) -> dict:
+        return {k[len(prefix) :]: v for k, v in state.items() if k.startswith(prefix)}
+
+    def _try_load_miewid_finetune_ckpt(self) -> None:
+        ckpt_path = self.settings.miewid_finetune_ckpt_path
+        if self.settings.model_name.lower().strip() != "miewid" or ckpt_path is None:
+            return
+        ckpt_path = Path(ckpt_path)
+        if not ckpt_path.exists():
+            logger.warning("miewid finetune checkpoint not found (skip): %s", ckpt_path)
+            return
+        try:
+            ckpt = torch.load(str(ckpt_path), map_location="cpu")
+            state = ckpt.get("state_dict", ckpt)
+            if not isinstance(state, dict):
+                raise RuntimeError("invalid checkpoint format (state_dict missing)")
+
+            backbone_sd = self._strip_prefix(state, "backbone.")
+            embed_sd = self._strip_prefix(state, "embed.")
+            bn_sd = self._strip_prefix(state, "bn.")
+            if not backbone_sd or not embed_sd or not bn_sd:
+                raise RuntimeError("checkpoint missing backbone/embed/bn keys")
+
+            # Support key layouts from different wrappers.
+            m1, u1 = self.model.load_state_dict(backbone_sd, strict=False)
+            if len(backbone_sd) > 0 and len(m1) >= len(backbone_sd):
+                backbone_sd2 = self._strip_prefix(backbone_sd, "backbone.")
+                if backbone_sd2:
+                    m2, u2 = self.model.load_state_dict(backbone_sd2, strict=False)
+                    logger.info(
+                        "retry load with stripped backbone prefix | missing=%d unexpected=%d",
+                        len(m2),
+                        len(u2),
+                    )
+            else:
+                logger.info("loaded finetune backbone | missing=%d unexpected=%d", len(m1), len(u1))
+
+            if "weight" not in embed_sd:
+                raise RuntimeError("embed.weight missing in checkpoint")
+            out_f, in_f = embed_sd["weight"].shape
+            self.proj_embed = nn.Linear(in_f, out_f)
+            self.proj_embed.load_state_dict(embed_sd, strict=True)
+            self.proj_embed.eval().to(self.device)
+
+            self.proj_bn = nn.BatchNorm1d(out_f)
+            self.proj_bn.load_state_dict(bn_sd, strict=True)
+            self.proj_bn.eval().to(self.device)
+
+            self._finetuned = True
+            self._finetune_ckpt_name = ckpt_path.name
+            logger.info("Loaded miewid finetune checkpoint: %s", ckpt_path)
+        except Exception:
+            logger.exception("Failed to load miewid finetune checkpoint (fallback to baseline)")
+            self.proj_embed = None
+            self.proj_bn = None
+            self._finetuned = False
+            self._finetune_ckpt_name = None
 
     def _resize_and_pad(self, img: Image.Image) -> Image.Image:
         """Resize with aspect ratio preserved and pad to a square input."""

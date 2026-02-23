@@ -41,6 +41,14 @@ class Settings(BaseSettings):
         default="miewid",
         description="Embedding model selector. Supported: miewid, mega-l-224, mega-t, clip, dinov2",
     )
+    miewid_model_source: str = Field(
+        default="conservationxlabs/miewid-msv3",
+        description="HF model source for miewid baseline backbone load.",
+    )
+    miewid_finetune_ckpt_path: Optional[Path] = Field(
+        default=None,
+        description="Optional Lightning finetune checkpoint path. If set, loads backbone+embed+bn from ckpt.",
+    )
     hf_cache_dir: Path = Field(
         default=Path("./weights"),
         description="HuggingFace/TIMM cache directory (mounted volume recommended on server).",
