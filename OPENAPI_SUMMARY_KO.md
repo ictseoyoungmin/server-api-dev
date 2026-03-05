@@ -1,0 +1,838 @@
+# API 명세서 
+
+본 문서는 `/workspace/PoC/dogface_fastapi_poc_qdrant`의 현재 서버 코드 기준으로 작성한 명세입니다.
+
+- 기준 라우터: `app/api/v1/router.py`
+- API Prefix: `/v1`
+- 기본 문서 URL(런타임): `/docs` (FastAPI Swagger UI)
+
+## 공통 사항
+
+- 응답 JSON 필드명은 기본적으로 `snake_case`입니다.
+- 이미지 업로드는 `multipart/form-data`를 사용합니다.
+- 업로드 이미지 크기 제한은 `settings.max_image_bytes` (`app/core/config.py`)를 따릅니다.
+- 일부 엔드포인트는 런타임 상태에 따라 `503`을 반환할 수 있습니다. (예: 모델/벡터DB 미준비)
+
+## 앱별 사용 범위 표기 규칙
+
+- `Face Verification 앱`: 등록/인증/Trial 수집 앱
+- `Semi-Auto Classification 앱`: 인입/분류/라벨링/버킷 확정 앱
+- `공통`: 두 앱 모두 사용 가능/사용 중
+
+분리 원칙 (현재 권장 운영):
+- `facebank` 데이터(`sync-images`, `trials`)는 `Face Verification 앱` 전용으로 사용
+- `Semi-Auto Classification 앱`은 `facebank`를 사용하지 않음
+- `Semi-Auto Classification 앱`의 exemplar(등록 기준 데이터)는 `POST /v1/ingest` + `POST /v1/labels`로 구축
+
+### 앱별 엔드포인트 요약 (빠른 참조)
+
+| Endpoint | Face Verification 앱 | Semi-Auto Classification 앱 | 비고 |
+| :--- | :---: | :---: | :--- |
+| `GET /v1/health` | O | O | 서버 연결/상태 확인 |
+| `POST /v1/embed` | O | (선택) | Verification의 Remote embedding |
+| `POST /v1/embed/batch` | - | - | 운영 플로우보단 도구/테스트 성격 |
+| `POST /v1/ingest` | - | O | 이미지 인입 + 검출 + 임베딩 |
+| `POST /v1/search` | - | (간접/실험) | 기존 gallery 검색 API |
+| `POST /v1/labels` | (선택) O | O | 분류 앱 핵심. Verification은 서버 라벨 동기화 시에만 |
+| `GET /v1/images` | - | O | 갤러리 조회 |
+| `GET /v1/images/{image_id}` | - | O | 이미지 바이트 조회 |
+| `GET /v1/images/{image_id}/meta` | (선택) O | O | 분류 앱 핵심. Verification은 서버 라벨 동기화 시 선택 |
+| `GET /v1/pets` | (선택) O | O | Classification 핵심, Verification은 선택 |
+| `GET /v1/sync-images` | O | - | Facebank 해시 중복 체크 |
+| `POST /v1/sync-images` | O | - | Facebank 이미지 업로드 |
+| `POST /v1/trials` | O | - | 인증 시도/피드백 업로드 |
+| `POST /v1/classify/auto` | - | O | 자동 분류 |
+| `POST /v1/classify/similar` | - | O | 탭 내 유사 정렬 |
+| `POST /v1/buckets/finalize` | - | O | 일자 버킷 확정 |
+| `GET /v1/buckets/{daycare_id}/{day}` | - | O | 버킷 manifest 조회 |
+
+## 1. 루트 / 헬스체크
+
+### `GET /`
+서비스 기본 정보 반환
+
+사용 앱:
+- 공통 (설정/디버깅 용도)
+
+응답 예시:
+```json
+{
+  "name": "dogface-embedding-api",
+  "docs": "/docs",
+  "health": "/v1/health"
+}
+```
+
+### `GET /v1/health`
+서비스/임베딩 모델 상태 확인
+
+사용 앱:
+- 공통
+
+응답 예시:
+```json
+{
+  "status": "ok",
+  "model": {
+    "model_name": "miewid",
+    "model_version": "miewid",
+    "input_size": 440,
+    "dim": 2152,
+    "device": "cuda:0"
+  }
+}
+```
+
+비고:
+- 모델 미초기화 시 `model`은 `null`일 수 있습니다.
+
+## 2. 임베딩 (DB 저장 없음)
+
+### `POST /v1/embed`
+단일 이미지 임베딩 생성
+
+사용 앱:
+- Face Verification 앱 (Remote embedding 모드)
+- Semi-Auto Classification 앱 (일반 운영 플로우에서는 미사용, 디버그/실험용 가능)
+
+- Content-Type: `multipart/form-data`
+
+Query Parameters:
+- `format` (optional): `json | f32 | f16` (기본값은 서버 설정 `response_format`)
+
+Form Fields:
+- `file` (required, file): 입력 이미지
+
+응답:
+- `format=json`: JSON
+- `format=f32|f16`: `application/octet-stream` (바이너리)
+
+JSON 응답 예시:
+```json
+{
+  "model_version": "miewid",
+  "dim": 1024,
+  "embedding": [0.0123, -0.0456]
+}
+```
+
+바이너리 응답 헤더:
+- `X-Embedding-Dim`
+- `X-Embedding-DType` (`float32` or `float16`)
+- `X-Model-Version`
+
+오류:
+- `400`: 잘못된 `format`, 잘못된 이미지
+- `413`: 업로드 크기 초과
+- `503`: 모델 미준비
+
+### `POST /v1/embed/batch`
+배치 이미지 임베딩 생성
+
+사용 앱:
+- 주로 운영 앱 직접 호출 대상 아님 (도구/실험/배치 확인용)
+
+- Content-Type: `multipart/form-data`
+
+Query Parameters:
+- `format` (optional): `json | f32 | f16`
+
+Form Fields:
+- `files` (required, file[], repeated): 입력 이미지 목록
+
+JSON 응답 예시:
+```json
+{
+  "model_version": "miewid",
+  "dim": 1024,
+  "items": [
+    { "filename": "a.jpg", "embedding": [0.01, -0.02] },
+    { "filename": "b.jpg", "embedding": [0.03, -0.04] }
+  ]
+}
+```
+
+바이너리 응답:
+- 포맷: `dogface-batch-v1`
+- 헤더: `X-Embedding-Count`, `X-Embedding-Dim`, `X-Embedding-DType`, `X-Model-Version`, `X-Batch-Format`
+
+오류:
+- `400`: 잘못된 `format`, `max_batch_size` 초과
+- `413`: 업로드 크기 초과
+- `503`: 모델 미준비
+
+## 3. 인제스트 (업로드 → 검출 → 임베딩 → 벡터DB 저장)
+
+### `POST /v1/ingest`
+
+사용 앱:
+- Semi-Auto Classification 앱
+
+- Content-Type: `multipart/form-data`
+
+Query Parameters:
+- `include_embedding` (optional, bool, default=false): 디버그 용도로 응답에 벡터 포함
+
+Form Fields:
+- `file` (required, file)
+- `daycare_id` (required, string)
+- `trainer_id` (optional, string)
+- `captured_at` (optional, string, ISO8601)
+
+응답 개요:
+- `image`: 업로드 이미지 메타
+- `instances[]`: 검출된 개체별 정보 (`instance_id`, `species`, `bbox`, 필요 시 `embedding`)
+
+응답 예시(축약):
+```json
+{
+  "image": {
+    "image_id": "img_xxx",
+    "daycare_id": "dc_001",
+    "width": 1280,
+    "height": 720,
+    "storage_path": "data/images/img_xxx.jpg"
+  },
+  "instances": [
+    {
+      "instance_id": "ins_xxx",
+      "class_id": 16,
+      "species": "DOG",
+      "confidence": 0.93,
+      "bbox": { "x1": 0.1, "y1": 0.2, "x2": 0.5, "y2": 0.9 }
+    }
+  ]
+}
+```
+
+오류:
+- `400`: 잘못된 `captured_at`, 이미지 파싱 실패
+- `413`: 업로드 크기 초과
+- `503`: 모델/검출기/벡터DB 미준비
+
+## 4. 검색 (갤러리 정렬)
+
+### `POST /v1/search`
+벡터 유사도 기반 이미지 검색 (instance-level 검색 후 image-level 집계)
+
+사용 앱:
+- 기본 Semi-Auto 분류 UI는 주로 `/v1/classify/similar` 사용
+- `Face Verification 앱`에서는 일반적으로 미사용
+- 실험/관리 툴에서 재사용 가능
+
+- Content-Type: `application/json`
+
+요청 바디:
+```json
+{
+  "daycare_id": "dc_001",
+  "query": {
+    "instance_ids": ["ins_..."],
+    "merge": "RRF"
+  },
+  "filters": {
+    "species": "DOG",
+    "captured_from": "2026-02-01T00:00:00Z",
+    "captured_to": "2026-02-01T23:59:59Z"
+  },
+  "top_k_images": 200,
+  "per_query_limit": 400
+}
+```
+
+응답 예시:
+```json
+{
+  "query_debug": {
+    "used_vectors": 1,
+    "merge": "RRF",
+    "per_query_limit": 400,
+    "top_k_images": 200
+  },
+  "results": [
+    {
+      "image_id": "img_...",
+      "score": 0.1234,
+      "best_match": {
+        "instance_id": "ins_...",
+        "bbox": { "x1": 0.1, "y1": 0.2, "x2": 0.5, "y2": 0.9 },
+        "score": 0.81
+      }
+    }
+  ]
+}
+```
+
+오류:
+- `400`: `query.instance_ids` 누락/비정상
+- `404`: 조회용 `instance_id` 벡터를 DB에서 찾지 못함
+- `503`: 벡터DB 미준비
+
+## 5. 라벨링 (instance_id → pet_id)
+
+### `POST /v1/labels`
+
+사용 앱:
+- Semi-Auto Classification 앱 (핵심)
+- Face Verification 앱 (선택: 새 pet/bucket 서버 반영 시 라벨 동기화 용도)
+
+- Content-Type: `application/json`
+
+요청 바디 예시:
+```json
+{
+  "daycare_id": "dc_001",
+  "labeled_by": "tester01",
+  "assignments": [
+    {
+      "instance_id": "ins_...",
+      "pet_id": "pet_aaa",
+      "action": "ACCEPT",
+      "source": "MANUAL",
+      "confidence": 1.0
+    }
+  ]
+}
+```
+
+응답 예시:
+```json
+{
+  "labeled_at": "2026-02-25T12:34:56.000000Z",
+  "items": [
+    {
+      "instance_id": "ins_...",
+      "pet_id": "pet_aaa",
+      "assignment_status": "ACCEPTED",
+      "updated": true
+    }
+  ]
+}
+```
+
+비고:
+- `action`: `ACCEPT | REJECT | CLEAR`
+- `source`: `MANUAL | AUTO | PROPAGATED`
+
+## 6. 이미지/메타 조회
+
+### `GET /v1/images`
+갤러리 이미지 목록 조회
+
+사용 앱:
+- Semi-Auto Classification 앱 (핵심)
+
+Query Parameters:
+- `daycare_id` (required, string)
+- `limit` (optional, int, default=200)
+- `offset` (optional, int, default=0)
+
+응답 예시(축약):
+```json
+{
+  "daycare_id": "dc_001",
+  "count": 2,
+  "items": [
+    {
+      "image_id": "img_...",
+      "daycare_id": "dc_001",
+      "raw_url": "/v1/images/img_xxx?variant=raw",
+      "thumb_url": "/v1/images/img_xxx?variant=thumb",
+      "instance_count": 3
+    }
+  ]
+}
+```
+
+### `GET /v1/images/{image_id}`
+원본/썸네일 이미지 바이너리 제공
+
+사용 앱:
+- Semi-Auto Classification 앱
+
+Query Parameters:
+- `variant` (optional, string): `raw | thumb` (default=`raw`)
+
+응답:
+- 이미지 파일 바이너리 (`image/jpeg`, `image/png` 등)
+
+오류:
+- `400`: 잘못된 `variant`
+- `404`: 메타/이미지 파일 없음
+
+### `GET /v1/images/{image_id}/meta`
+이미지 메타 + 검출 인스턴스 메타 조회
+
+사용 앱:
+- Semi-Auto Classification 앱 (핵심: 인스턴스 선택/라벨링)
+- Face Verification 앱 (선택: 서버 인스턴스 라벨 동기화 시)
+
+응답 예시(축약):
+```json
+{
+  "image": {
+    "image_id": "img_...",
+    "daycare_id": "dc_001",
+    "width": 1280,
+    "height": 720,
+    "raw_url": "/v1/images/img_xxx?variant=raw",
+    "thumb_url": "/v1/images/img_xxx?variant=thumb"
+  },
+  "instances": [
+    {
+      "instance_id": "ins_...",
+      "class_id": 16,
+      "species": "DOG",
+      "confidence": 0.91,
+      "bbox": { "x1": 0.1, "y1": 0.2, "x2": 0.5, "y2": 0.9 },
+      "pet_id": null
+    }
+  ]
+}
+```
+
+## 7. 반려동물 목록 조회
+
+### `GET /v1/pets`
+등록/라벨된 반려동물 목록 조회 (daycare 기준)
+
+사용 앱:
+- Semi-Auto Classification 앱 (PET 탭/선택 UI)
+- Face Verification 앱 (선택: 서버 기준 pet 목록 동기화 UI)
+
+Query Parameters:
+- `daycare_id` (required, string)
+
+응답 예시:
+```json
+{
+  "daycare_id": "dc_001",
+  "count": 2,
+  "items": [
+    {
+      "pet_id": "pet_aaa",
+      "pet_name": "anna",
+      "image_count": 12,
+      "instance_count": 30
+    }
+  ]
+}
+```
+
+비고:
+- `pet_name`은 `storage_dir/pets` 디렉터리 구조를 기반으로 추론됩니다.
+- Classification 앱에서는 PET 탭/라벨링 대상 선택의 기준 목록으로 사용합니다.
+- Verification 앱에서 사용할 경우, 서버 기준 pet 목록 동기화 UI 용도로만 사용하는 것을 권장합니다.
+
+## 8. Facebank 이미지 동기화 (해시 기반 중복 제거)
+
+### `GET /v1/sync-images`
+클라이언트가 가진 facebank 이미지 해시 중 서버에 이미 있는 항목 조회
+
+사용 앱:
+- Face Verification 앱 (핵심)
+
+비고:
+- `facebank` 저장/동기화 전용 API입니다.
+- Semi-Auto Classification 앱의 등록/분류 exemplar 파이프라인에는 사용하지 않습니다.
+
+Query Parameters:
+- `petId` (required, string)
+- `petName` (optional, string): 서버 폴더 경로 그룹핑에 사용
+- `facebankId` (required, string)
+- `facebankVersion` (optional, int): 생략 시 최신 버전 탐색
+- `hashes` (required, string): SHA-256 CSV 목록
+
+응답 예시:
+```json
+{
+  "existing_hashes": [
+    "8653a0...",
+    "5bfc8d..."
+  ]
+}
+```
+
+비고:
+- 서버 응답은 `existing_hashes` (`snake_case`) 입니다.
+- 서버는 일부 레거시 경로(`data/pets/{petId}/{facebankId}/vN`)도 조회 호환합니다.
+
+### `POST /v1/sync-images`
+서버에 없는 facebank 이미지 업로드 및 메타 저장
+
+사용 앱:
+- Face Verification 앱 (핵심)
+
+비고:
+- 서버에 facebank 원본/해시/메타를 저장하지만, 이 데이터만으로는 Classification용 exemplar(Qdrant 라벨 데이터)가 생성되지 않습니다.
+- Semi-Auto Classification 앱의 초기 exemplar 구축은 `/v1/ingest` + `/v1/labels`를 사용합니다.
+
+- Content-Type: `multipart/form-data`
+
+Form Fields:
+- `petId` (required, string)
+- `petName` (required, string)
+- `facebankId` (required, string)
+- `facebankVersion` (required, int)
+- `images` (required, file[], repeated)
+- `hashes` (required, string[], repeated)
+- `modelVersion` (optional, string)
+- `embeddingDim` (optional, int)
+- `threshold` (optional, float)
+- `deviceId` (optional, string)
+- `createdAt` (optional, string, ISO8601)
+
+응답 예시:
+```json
+{
+  "pet_id": "747094aa-cece-42f5-88d2-4115ae6e6500",
+  "facebank_id": "12efd248-7473-4691-b21f-e960ed428125",
+  "facebank_version": 1,
+  "received": 5,
+  "skipped": 0,
+  "stored": 5,
+  "existing_hashes": [],
+  "model_version": null,
+  "embedding_dim": null,
+  "threshold": null,
+  "device_id": null
+}
+```
+
+오류:
+- `400`: `images`와 `hashes` 개수 불일치
+- `413`: 업로드 크기 초과
+- `500`: 해시 인덱스 파일 파싱 실패
+
+저장 구조 (현재 코드 기준):
+- `data/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/images/*`
+- `data/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/hash_index.json`
+- `data/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/facebank_meta.json`
+
+## 9. 인증 시도(Trial) 업로드
+
+### `POST /v1/trials`
+인증 시도 결과 + 사용자 피드백 + 캡처 이미지를 저장
+
+사용 앱:
+- Face Verification 앱 (핵심)
+
+비고:
+- Verification 성능 데이터 수집용 API이며, Semi-Auto Classification 플로우와는 독립입니다.
+
+- Content-Type: `multipart/form-data`
+
+Form Fields:
+- `id` (required, string): trial UUID (idempotency key)
+- `petId` (required, string)
+- `petName` (optional, string): 서버 폴더 경로 그룹핑에 사용
+- `facebankId` (required, string)
+- `facebankVersion` (required, int)
+- `score` (required, float)
+- `isSuccess` (required, bool)
+- `userFeedback` (required, bool)
+- `timestamp` (optional, string): ISO8601 (`Z` 허용)
+- `pose` (optional, string)
+- `trialImage` (required, file)
+
+응답 예시 (신규 저장):
+```json
+{
+  "trial_id": "01be0cd7-226e-4b96-8aac-7fc93e91371f",
+  "status": "stored",
+  "stored": true,
+  "storage_path": "data/pets/{petId}/{petName}/trials/2026-02-06/01be0cd7-....json",
+  "outcome": "TP"
+}
+```
+
+응답 예시 (중복 trial_id):
+```json
+{
+  "trial_id": "01be0cd7-226e-4b96-8aac-7fc93e91371f",
+  "status": "duplicate",
+  "stored": false,
+  "storage_path": "data/pets/{petId}/{petName}/trials/2026-02-06/01be0cd7-....json",
+  "outcome": null
+}
+```
+
+서버 내부 판정 라벨 (`outcome`) 계산식:
+- `TP`: `isSuccess=true` and `userFeedback=true`
+- `FP`: `isSuccess=true` and `userFeedback=false`
+- `FN`: `isSuccess=false` and `userFeedback=true`
+- `TN`: `isSuccess=false` and `userFeedback=false`
+
+오류:
+- `400`: `timestamp` 형식 오류 (현재 서버는 ISO8601 문자열 기대)
+- `413`: 업로드 크기 초과
+
+저장 구조 (현재 코드 기준):
+- `data/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.json`
+- `data/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.{jpg|png|webp}`
+- (`petName` 미전송 시 레거시 경로 `data/trials/{YYYY-MM-DD}` 사용)
+
+## 10. 분류 보조/버킷 확정 (Semi-auto Classification)
+
+### `POST /v1/classify/auto`
+미분류 인스턴스에 대해 자동 분류를 수행하고 라벨 상태를 갱신
+
+사용 앱:
+- Semi-Auto Classification 앱 (핵심)
+
+비고:
+- 동작 전제: Qdrant에 `pet_id`가 라벨된 exemplar 인스턴스가 존재해야 합니다.
+- facebank 동기화 데이터는 직접 사용하지 않습니다.
+
+- Content-Type: `application/json`
+- Form Fields: 없음 (JSON Body 사용)
+
+요청 주요 필드:
+- `daycare_id` (string)
+- `date` (date)
+- `species` (optional: `DOG | CAT`)
+- `auto_accept_threshold` (float, default 0.78)
+- `candidate_threshold` (float, default 0.62)
+- `search_limit` (int, default 200)
+- `labeled_by` (optional)
+- `dry_run` (bool, default false)
+
+요청 바디 예시:
+```json
+{
+  "daycare_id": "dc_001",
+  "date": "2026-02-13",
+  "species": "DOG",
+  "auto_accept_threshold": 0.78,
+  "candidate_threshold": 0.62,
+  "search_limit": 200,
+  "labeled_by": "trainer_001",
+  "dry_run": false
+}
+```
+
+응답 주요 필드:
+- `requested_at`
+- `date`, `daycare_id`, `dry_run`
+- `summary` (`scanned_instances`, `accepted`, `unreviewed_candidate`, ...)
+- `items[]` (`instance_id`, `image_id`, `score`, `selected_pet_id`, `assignment_status`, `updated`)
+
+응답 예시(축약):
+```json
+{
+  "requested_at": "2026-02-25T10:10:10.100000Z",
+  "date": "2026-02-13",
+  "daycare_id": "dc_001",
+  "dry_run": false,
+  "summary": {
+    "scanned_instances": 320,
+    "accepted": 180,
+    "unreviewed_candidate": 90,
+    "unreviewed_no_candidate": 50,
+    "unchanged": 12
+  },
+  "items": [
+    {
+      "instance_id": "ins_aaa",
+      "image_id": "img_111",
+      "species": "DOG",
+      "score": 0.83,
+      "selected_pet_id": "pet_pomi",
+      "assignment_status": "ACCEPTED",
+      "updated": true
+    }
+  ]
+}
+```
+
+### `POST /v1/classify/similar`
+분류 UI용 유사 이미지 검색 (일자/탭/펫 기준)
+
+사용 앱:
+- Semi-Auto Classification 앱 (핵심)
+
+- Content-Type: `application/json`
+- Form Fields: 없음 (JSON Body 사용)
+
+요청 주요 필드:
+- `daycare_id` (string)
+- `date` (date)
+- `tab` (`ALL | UNCLASSIFIED | PET`)
+- `pet_id` (optional, `tab=PET`일 때 주로 사용)
+- `query_instance_ids` (string[], min 1)
+- `merge` (`MAX | RRF`, default `RRF`)
+- `top_k_images` (int)
+- `per_query_limit` (int)
+
+요청 바디 예시:
+```json
+{
+  "daycare_id": "dc_001",
+  "date": "2026-02-13",
+  "tab": "UNCLASSIFIED",
+  "pet_id": null,
+  "query_instance_ids": ["ins_aaa", "ins_bbb"],
+  "merge": "RRF",
+  "top_k_images": 200,
+  "per_query_limit": 400
+}
+```
+
+응답 주요 필드:
+- `requested_at`, `date`, `daycare_id`, `tab`, `pet_id`
+- `query_debug`
+- `results[]` (`image_id`, `score`, `best_match_instance_id`, `best_match_score`, `raw_url`, `thumb_url`)
+
+응답 예시(축약):
+```json
+{
+  "requested_at": "2026-02-25T10:20:20.200000Z",
+  "date": "2026-02-13",
+  "daycare_id": "dc_001",
+  "tab": "UNCLASSIFIED",
+  "pet_id": null,
+  "query_debug": {
+    "used_vectors": 2,
+    "merge": "RRF",
+    "per_query_limit": 400,
+    "top_k_images": 200,
+    "allowed_images": 128
+  },
+  "results": [
+    {
+      "image_id": "img_999",
+      "score": 0.0412,
+      "best_match_instance_id": "ins_xxx",
+      "best_match_score": 0.8123,
+      "raw_url": "/v1/images/img_999?variant=raw",
+      "thumb_url": "/v1/images/img_999?variant=thumb"
+    }
+  ]
+}
+```
+
+### `POST /v1/buckets/finalize`
+하루치 라벨 결과를 바탕으로 pet별 이미지 버킷을 확정하고 manifest 저장
+
+사용 앱:
+- Semi-Auto Classification 앱 (핵심)
+
+- Content-Type: `application/json`
+
+요청 바디:
+```json
+{
+  "daycare_id": "dc_001",
+  "date": "2026-02-25",
+  "pet_ids": ["pet_id_1", "pet_id_2"]
+}
+```
+
+응답 예시 (중요: `buckets`는 배열):
+```json
+{
+  "finalized_at": "2026-02-25T12:34:56.789000Z",
+  "daycare_id": "dc_001",
+  "date": "2026-02-25",
+  "bucket_count": 2,
+  "total_images": 3,
+  "quality_metrics": {
+    "total_day_images": 20,
+    "unclassified_images": 5,
+    "unclassified_image_ratio": 0.25,
+    "total_instances": 42,
+    "accepted_instances": 30,
+    "accepted_auto_instances": 18,
+    "unreviewed_instances": 8,
+    "rejected_instances": 4,
+    "auto_accept_ratio": 0.4285714286
+  },
+  "manifest_path": "data/buckets/dc_001/2026-02-25/finalize_20260225T123456Z.json",
+  "buckets": [
+    {
+      "pet_id": "pet_id_1",
+      "image_ids": ["image_id_1", "image_id_2"],
+      "count": 2
+    },
+    {
+      "pet_id": "pet_id_2",
+      "image_ids": ["image_id_3"],
+      "count": 1
+    }
+  ]
+}
+```
+
+비고:
+- `buckets`는 `Map<String, List<String>>`가 아니라 `List[FinalizeBucketItem]` 입니다.
+- `manifest_path`, `quality_metrics`는 `snake_case` 필드명입니다.
+
+### `GET /v1/buckets/{daycare_id}/{day}`
+저장된 일자 버킷 manifest 조회
+
+사용 앱:
+- Semi-Auto Classification 앱 (핵심)
+
+Path Parameters:
+- `daycare_id` (string)
+- `day` (date, `YYYY-MM-DD`)
+
+Query Parameters:
+- `manifest` (optional, string): 특정 manifest 파일명 지정
+
+응답 구조:
+- `FinalizeBucketsResponse`와 유사 (`manifest_path`, `quality_metrics`, `buckets[]`)
+
+응답 예시(축약):
+```json
+{
+  "daycare_id": "dc_001",
+  "date": "2026-02-13",
+  "manifest_path": "data/buckets/dc_001/2026-02-13/finalize_20260225T101133Z.json",
+  "finalized_at": "2026-02-25T10:11:33.000000Z",
+  "bucket_count": 3,
+  "total_images": 87,
+  "quality_metrics": {
+    "total_day_images": 120,
+    "unclassified_images": 33,
+    "unclassified_image_ratio": 0.275,
+    "total_instances": 210,
+    "accepted_instances": 150,
+    "accepted_auto_instances": 96,
+    "unreviewed_instances": 48,
+    "rejected_instances": 12,
+    "auto_accept_ratio": 0.4571
+  },
+  "buckets": [
+    {
+      "pet_id": "pet_pomi",
+      "image_ids": ["img_1", "img_2"],
+      "count": 2
+    }
+  ]
+}
+```
+
+## 에러 코드 요약 (빈번)
+
+- `400 Bad Request`
+  - 파라미터/바디 검증 실패(비즈니스 로직 레벨)
+  - 잘못된 timestamp/format 등
+- `404 Not Found`
+  - 이미지/메타 없음
+  - 검색용 query 벡터 미존재
+- `413 Payload Too Large`
+  - 업로드 이미지 크기 제한 초과
+- `422 Unprocessable Entity`
+  - FastAPI 레벨 필드 누락/타입 불일치 (예: 필수 Query/Form 누락)
+- `500 Internal Server Error`
+  - 파일 파싱 오류 등 서버 내부 예외
+- `503 Service Unavailable`
+  - 모델/검출기/벡터DB 미준비
+
+## 참고 파일
+
+- 라우터: `app/api/v1/router.py`
+- 엔드포인트: `app/api/v1/endpoints/`
+- 스키마: `app/schemas/`
+- 설정: `app/core/config.py`
