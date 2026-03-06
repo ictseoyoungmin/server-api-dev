@@ -7,7 +7,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
@@ -40,6 +40,15 @@ def _parse_species(class_id: int) -> str:
     return "UNKNOWN"
 
 
+def _safe_folder_name(name: Optional[str]) -> str:
+    if not name:
+        return "unknown"
+    safe = name.strip().replace("/", "_")
+    if os.altsep:
+        safe = safe.replace(os.altsep, "_")
+    return safe or "unknown"
+
+
 def _get_embedder(request: Request):
     embedder = getattr(request.app.state, "embedder", None)
     if embedder is None:
@@ -68,6 +77,8 @@ async def ingest(
     daycare_id: str = Form(...),
     trainer_id: Optional[str] = Form(default=None),
     captured_at: Optional[str] = Form(default=None, description="ISO8601 timestamp"),
+    image_role: Literal["DAILY", "SEED"] = Form(default="DAILY"),
+    pet_name: Optional[str] = Form(default=None, description="Used for SEED storage subdirectory"),
     include_embedding: bool = Query(default=False, description="Include vectors in response (debug)."),
 ):
     """Upload an image, detect pets, embed each detected instance, and store in vector DB."""
@@ -92,8 +103,14 @@ async def ingest(
 
     # Persist raw image (PoC local storage)
     base_dir = Path(settings.storage_dir)
-    raw_dir = base_dir / "images"
-    thumb_dir = base_dir / "thumbs"
+    role_dir = image_role.lower()
+    if image_role == "SEED":
+        pet_dir = _safe_folder_name(pet_name)
+        raw_dir = base_dir / "images" / role_dir / pet_dir
+        thumb_dir = base_dir / "thumbs" / role_dir / pet_dir
+    else:
+        raw_dir = base_dir / "images" / role_dir
+        thumb_dir = base_dir / "thumbs" / role_dir
     meta_dir = base_dir / "meta"
     raw_dir.mkdir(parents=True, exist_ok=True)
     thumb_dir.mkdir(parents=True, exist_ok=True)
@@ -125,6 +142,11 @@ async def ingest(
         detections = [
             type("_D", (), {"class_id": 16, "confidence": 1.0, "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 1.0})
         ]
+
+    # Seed policy: one exemplar instance per image.
+    # Keep only the highest-confidence detection for SEED images.
+    if image_role == "SEED" and len(detections) > 1:
+        detections = [max(detections, key=lambda d: float(getattr(d, "confidence", 0.0)))]
 
     # Crop instances
     crops = []
@@ -159,6 +181,8 @@ async def ingest(
             "daycare_id": daycare_id,
             "trainer_id": trainer_id,
             "image_id": image_id,
+            "image_role": image_role,
+            "pet_name": pet_name,
             "captured_at_ts": cap_ts,
             "species": species,
             "class_id": int(d.class_id),
@@ -212,6 +236,8 @@ async def ingest(
         "image": {
             "image_id": image_id,
             "daycare_id": daycare_id,
+            "image_role": image_role,
+            "pet_name": pet_name,
             "trainer_id": trainer_id,
             "captured_at": (cap_dt.isoformat() if cap_dt else None),
             "uploaded_at": uploaded_at.isoformat(),
@@ -234,6 +260,7 @@ async def ingest(
         image=ImageMeta(
             image_id=image_id,
             daycare_id=daycare_id,
+            image_role=image_role,
             captured_at=cap_dt,
             uploaded_at=uploaded_at,
             width=w,

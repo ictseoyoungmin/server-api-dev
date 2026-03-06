@@ -131,6 +131,29 @@ class QdrantStore:
             out[self.external_instance_id(str(p.id))] = list(p.vector)  # type: ignore[arg-type]
         return out
 
+    def retrieve_points(
+        self,
+        instance_ids: Iterable[str],
+        with_vectors: bool = False,
+    ) -> Dict[str, PointRecord]:
+        ids = self.normalize_instance_ids(instance_ids)
+        if not ids:
+            return {}
+        pts = self.client.retrieve(
+            collection_name=self.collection,
+            ids=ids,
+            with_vectors=with_vectors,
+            with_payload=True,
+        )
+        out: Dict[str, PointRecord] = {}
+        for p in pts:
+            external_id = self.external_instance_id(str(p.id))
+            vec = None
+            if with_vectors and p.vector is not None:
+                vec = list(p.vector)  # type: ignore[arg-type]
+            out[external_id] = PointRecord(point_id=str(p.id), vector=vec, payload=p.payload or {})
+        return out
+
     def set_payload(self, instance_ids: Iterable[str], payload: Dict[str, Any]) -> None:
         ids = self.normalize_instance_ids(instance_ids)
         if not ids:

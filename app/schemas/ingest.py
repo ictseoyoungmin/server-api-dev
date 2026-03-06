@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Literal, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -16,6 +16,7 @@ class BBox(BaseModel):
 class ImageMeta(BaseModel):
     image_id: str
     daycare_id: str
+    image_role: Literal["DAILY", "SEED"] = "DAILY"
     captured_at: Optional[datetime] = None
     uploaded_at: datetime
     width: int

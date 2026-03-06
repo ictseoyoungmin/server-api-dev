@@ -51,6 +51,10 @@ def _payload_instance_id(store: QdrantStore, p: PointRecord) -> str:
 
 
 def _is_target(payload: dict) -> bool:
+    if bool(payload.get("is_seed", False)):
+        return False
+    if str(payload.get("image_role") or "").upper() == "SEED":
+        return False
     pet_id = payload.get("pet_id")
     status = str(payload.get("assignment_status") or "").upper()
     if pet_id:
@@ -59,11 +63,12 @@ def _is_target(payload: dict) -> bool:
 
 
 def _is_exemplar(payload: dict) -> bool:
-    pet_id = payload.get("pet_id")
-    if not pet_id:
+    if not bool(payload.get("is_seed", False)):
         return False
-    status = str(payload.get("assignment_status") or "").upper()
-    return status in ("", "ACCEPTED")
+    seed_pet_id = payload.get("seed_pet_id")
+    if not seed_pet_id:
+        return False
+    return bool(payload.get("seed_active", True))
 
 
 def _meta_day_utc(meta: dict) -> str:
@@ -95,11 +100,17 @@ def _matches_tab(meta: dict, tab: Literal["ALL", "UNCLASSIFIED", "PET"], pet_id:
     return any((i.get("assignment_status") == "ACCEPTED") and (i.get("pet_id") == pet_id) for i in instances)
 
 
+def _is_seed_image(meta: dict) -> bool:
+    img = meta.get("image") or {}
+    return str(img.get("image_role") or "DAILY").upper() == "SEED"
+
+
 def _load_day_metas(
     daycare_id: str,
     day: date,
     tab: Literal["ALL", "UNCLASSIFIED", "PET"] = "ALL",
     pet_id: Optional[str] = None,
+    include_seed: bool = False,
 ) -> List[dict]:
     meta_dir = Path(settings.storage_dir) / "meta"
     if not meta_dir.exists():
@@ -113,6 +124,8 @@ def _load_day_metas(
             if str(img.get("daycare_id")) != daycare_id:
                 continue
             if _meta_day_utc(meta) != day_str:
+                continue
+            if (not include_seed) and _is_seed_image(meta):
                 continue
             if not _matches_tab(meta, tab, pet_id):
                 continue
@@ -201,7 +214,7 @@ async def auto_classify(request: Request, body: AutoClassifyRequest):
                 continue
             if not _is_exemplar(h.payload):
                 continue
-            best_pet_id = str(h.payload.get("pet_id"))
+            best_pet_id = str(h.payload.get("seed_pet_id"))
             best_score = float(h.score)
             break
 
@@ -312,7 +325,13 @@ async def classify_similar(request: Request, body: SimilarSearchRequest):
 
     store = _get_store(request)
     now = datetime.now(timezone.utc)
-    metas = _load_day_metas(daycare_id=body.daycare_id, day=body.date, tab=body.tab, pet_id=body.pet_id)
+    metas = _load_day_metas(
+        daycare_id=body.daycare_id,
+        day=body.date,
+        tab=body.tab,
+        pet_id=body.pet_id,
+        include_seed=body.include_seed,
+    )
     allowed_image_ids: Set[str] = set()
     image_urls: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
     for m in metas:
@@ -428,7 +447,7 @@ def _manifest_dir(daycare_id: str, day: date) -> Path:
 async def finalize_buckets(body: FinalizeBucketsRequest):
     """Build and persist per-pet daily image buckets from accepted assignments."""
     now = datetime.now(timezone.utc)
-    metas = _load_day_metas(daycare_id=body.daycare_id, day=body.date, tab="ALL", pet_id=None)
+    metas = _load_day_metas(daycare_id=body.daycare_id, day=body.date, tab="ALL", pet_id=None, include_seed=False)
     allowed_pet_ids = set(body.pet_ids) if body.pet_ids else None
 
     pet_map: Dict[str, Set[str]] = {}

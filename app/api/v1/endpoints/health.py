@@ -24,3 +24,53 @@ def health(request: Request):
         "status": "ok",
         "model": info,
     }
+
+
+@router.get("/health/qdrant")
+def qdrant_health(request: Request):
+    store = getattr(request.app.state, "vector_store", None)
+    if store is None:
+        return {"status": "not_ready", "qdrant": None}
+
+    try:
+        collection = store.client.get_collection(store.collection)
+        points_count = store.client.count(collection_name=store.collection, exact=True).count
+
+        # Some Qdrant builds return null for vectors_count/indexed_vectors_count.
+        # To make status practical, sample a small page with vectors included.
+        sample_points, _ = store.client.scroll(
+            collection_name=store.collection,
+            limit=64,
+            with_payload=False,
+            with_vectors=True,
+        )
+        sampled_points = len(sample_points)
+        sampled_with_vector = 0
+        sampled_vector_dim = None
+        for p in sample_points:
+            vec = getattr(p, "vector", None)
+            if vec is None:
+                continue
+            sampled_with_vector += 1
+            if sampled_vector_dim is None:
+                try:
+                    sampled_vector_dim = len(vec)  # dense single-vector collection
+                except Exception:
+                    sampled_vector_dim = None
+
+        return {
+            "status": "ok",
+            "qdrant": {
+                "collection": store.collection,
+                "vectors_count": getattr(collection, "vectors_count", None),
+                "points_count": int(points_count),
+                "indexed_vectors_count": getattr(collection, "indexed_vectors_count", None),
+                "status": str(getattr(collection, "status", None)),
+                "sampled_points": sampled_points,
+                "sampled_with_vector": sampled_with_vector,
+                "sampled_has_vector": sampled_with_vector > 0,
+                "sampled_vector_dim": sampled_vector_dim,
+            },
+        }
+    except Exception as e:
+        return {"status": "error", "qdrant": {"collection": store.collection}, "error": str(e)}

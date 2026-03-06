@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import router as v1_router
 from app.core.config import settings
@@ -52,6 +54,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 app.include_router(v1_router, prefix=settings.api_prefix)
+admin_dir = Path(__file__).resolve().parents[1] / "for_admin"
+if admin_dir.exists():
+    app.mount("/admin", StaticFiles(directory=str(admin_dir), html=True), name="admin")
 
 
 @app.get("/")

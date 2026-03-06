@@ -49,6 +49,7 @@ class SimilarSearchRequest(BaseModel):
     date: date
     tab: Literal["ALL", "UNCLASSIFIED", "PET"] = "ALL"
     pet_id: Optional[str] = None
+    include_seed: bool = False
     query_instance_ids: List[str] = Field(default_factory=list, min_length=1)
     merge: Literal["MAX", "RRF"] = "RRF"
     top_k_images: int = Field(default=200, ge=1, le=2000)

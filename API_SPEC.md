@@ -10,6 +10,28 @@ Base URL (default):
 ## 1) Health
 `GET /v1/health`
 
+`GET /v1/health/qdrant`
+
+Response (example):
+```json
+{
+  "status": "ok",
+  "qdrant": {
+    "collection": "pet_instances_v1",
+    "points_count": 6,
+    "sampled_points": 6,
+    "sampled_with_vector": 6,
+    "sampled_has_vector": true,
+    "sampled_vector_dim": 2152,
+    "status": "green"
+  }
+}
+```
+
+Notes:
+- `vectors_count` / `indexed_vectors_count` may be `null`/`0` on some Qdrant builds.
+- Practical vector-presence check is `sampled_has_vector` + `sampled_with_vector`.
+
 ## 2) Ingest (upload → detect → embed → store)
 `POST /v1/ingest`
 
@@ -20,6 +42,8 @@ Fields:
 - `daycare_id` (required) : string
 - `trainer_id` (optional) : string
 - `captured_at` (optional) : ISO8601 string (e.g. `2026-01-31T09:10:11Z`)
+- `image_role` (optional) : `DAILY|SEED` (default `DAILY`)
+- `pet_name` (optional) : when `image_role=SEED`, used for subdirectory path
 
 Query:
 - `include_embedding` (optional, default false)
@@ -29,6 +53,10 @@ Response:
 - `instances[]`: per detected instance: `instance_id`, `class_id`, `species`, `confidence`, `bbox`
   - `embedding` is included only when `include_embedding=true`
   - `embedding_meta` is included when an embedding is present
+
+Seed policy:
+- When `image_role=SEED`, server stores only one instance per image (highest `confidence` detection).
+- When `image_role=DAILY`, multi-instance ingest is preserved.
 
 ## 3) Search (gallery ordering)
 `POST /v1/search`
@@ -106,11 +134,12 @@ Query:
 - `date` (optional): `YYYY-MM-DD` (UTC date filter)
 - `tab` (optional): `ALL | UNCLASSIFIED | PET` (default `ALL`)
 - `pet_id` (required when `tab=PET`)
+- `include_seed` (optional, default `false`): seed(exemplar) 이미지 포함 여부
 - `limit` (optional, default 200)
 - `offset` (optional, default 0)
 
 Response:
-- `items[]`: `image_id`, `raw_url`, `thumb_url`, timestamps, etc.
+- `items[]`: `image_id`, `raw_url`, `thumb_url`, timestamps, `pet_ids[]`, etc.
 
 `GET /v1/images/{image_id}?variant=raw|thumb`
 
@@ -119,6 +148,9 @@ Returns image meta + detected instances (bbox, class_id, etc.).
 Note:
 - Image/instance metadata is read from local JSON sidecars created at ingest time.
 - Label updates via `/v1/labels` are written to Qdrant payload and mirrored to these JSON sidecars.
+- Physical storage is role-separated by `image_role`:
+  - daily images: `storage_dir/images/daily/*`, `storage_dir/thumbs/daily/*`
+  - seed(exemplar) images: `storage_dir/images/seed/{pet_name}/*`, `storage_dir/thumbs/seed/{pet_name}/*`
 
 ## 5.0) Pets (for PET tab selector)
 `GET /v1/pets`
@@ -130,11 +162,93 @@ Response:
 - `items[]`: `pet_id`, `pet_name`, `image_count`, `instance_count`
 
 Notes:
-- Primary source is labeled instances in `storage_dir/meta/*.json` filtered by `daycare_id`.
+- Primary source is Qdrant payload points filtered by `daycare_id` (`pet_id` and `seed_pet_id` aggregation).
 - `pet_name` is resolved from `storage_dir/pets/{pet_id}/{pet_name}` when available.
 - For PoC fallback, pets existing under `storage_dir/pets` are included even if counts are zero.
 
-## 5.1) Auto Classification (date scope)
+## 5.0.1) Daycares (admin list/reset)
+`GET /v1/daycares`
+
+Query:
+- `limit` (optional, default 200)
+- `offset` (optional, default 0)
+- `q` (optional): daycare_id substring filter
+
+Response:
+- `items[]`: `daycare_id`, `image_count`, `daily_image_count`, `seed_image_count`, `pet_count`, `instance_count`, `last_captured_at`
+
+`DELETE /v1/daycares/{daycare_id}`
+
+Query:
+- `delete_qdrant` (optional, default `true`): delete points in collection by `daycare_id`
+- `delete_storage` (optional, default `true`): delete local sidecars/raw/thumb/buckets for the daycare
+
+Notes:
+- Intended for admin test reset workflow.
+- This operation is destructive and not reversible.
+
+## 5.1) Exemplars (initial registration images)
+`GET /v1/exemplars`
+
+Query:
+- `daycare_id` (required)
+- `pet_id` (optional)
+- `species` (optional)
+- `active` (optional, default `true`)
+- `q` (optional): substring search on `instance_id`, `image_id`, `note`, `pet_id`
+- `limit`, `offset` (optional)
+
+Response:
+- `items[]`: `instance_id`, `pet_id`, `active`, `rank`, `note`, `created_at`, `updated_at`, `image_id`, ...
+
+`POST /v1/exemplars`
+
+Purpose:
+- Register one or more instance IDs as initial exemplars for a pet.
+- This API is intended for admin workflows (dashboard) and becomes the canonical source for auto-classifier exemplar pool.
+
+`POST /v1/exemplars/upload`
+
+Purpose:
+- Convenience endpoint for admin dashboard.
+- Upload one image + `pet_name` and perform:
+  1) ingest (detect + embed + store)
+  2) exemplar registration (`is_seed=true`, `seed_pet_id=<pet_name>`)
+
+Notes:
+- Assumes `pet_name` uniqueness for ID mapping in quick mode.
+- `apply_to_all_instances=false` (default) registers only the highest-confidence instance.
+
+`POST /v1/exemplars/upload-folder`
+
+Purpose:
+- Bulk admin registration from a folder structure.
+- Expected relative paths:
+  - `root/pet_name/image.ext`
+  - `pet_name/image.ext`
+
+Request (`multipart/form-data`):
+- `files` (repeated): image files
+- `relative_paths` (repeated): each file's relative path (same order as `files`)
+- `daycare_id` (required)
+- `sync_label`, `apply_to_all_instances`, `skip_on_error` (optional)
+
+Behavior:
+- Derives `pet_name` from folder name.
+- Runs ingest + exemplar registration per image.
+- Returns per-file success/failure summary.
+
+`PATCH /v1/exemplars/{instance_id}`
+
+Purpose:
+- Update exemplar metadata (`pet_id`, `active`, `rank`, `note`).
+
+`DELETE /v1/exemplars/{instance_id}`
+
+Purpose:
+- Remove exemplar status from an instance (does not delete the instance itself).
+
+## 5.2) Auto Classification (date scope)
 `POST /v1/classify/auto`
 
 **Content-Type**: `application/json`
@@ -152,14 +266,14 @@ Notes:
 
 Behavior:
 - Target: instances on the given date that are not `assignment_status=ACCEPTED` and have no `pet_id`.
-- Exemplar pool: labeled instances in the same daycare (`pet_id` exists; `assignment_status` is empty or `ACCEPTED`).
+- Exemplar pool: instances explicitly registered as exemplar (`is_seed=true`, `seed_pet_id` set, `seed_active=true`) in the same daycare.
 - Decision:
   - `score >= auto_accept_threshold`: write `pet_id`, `assignment_status=ACCEPTED`
   - `candidate_threshold <= score < auto_accept_threshold`: write candidate only (`auto_pet_id`, `assignment_status=UNREVIEWED`)
   - below threshold: keep `UNREVIEWED`
 - When `dry_run=true`, no payload/sidecar updates are written.
 
-## 5.2) Similar Search In Current Tab
+## 5.3) Similar Search In Current Tab
 `POST /v1/classify/similar`
 
 **Content-Type**: `application/json`
@@ -169,6 +283,7 @@ Behavior:
   "daycare_id": "dc_001",
   "date": "2026-02-13",
   "tab": "UNCLASSIFIED",
+  "include_seed": false,
   "query_instance_ids": ["ins_..."],
   "merge": "RRF",
   "top_k_images": 200,
@@ -182,10 +297,11 @@ Behavior:
   - `ALL`
   - `UNCLASSIFIED`
   - `PET` (`pet_id` required)
+- By default, seed(exemplar) images are excluded (`include_seed=false`).
 - Returns tab-local image ranking by similarity score.
 - Each result also includes `raw_url` and `thumb_url` for direct gallery rendering.
 
-## 5.3) Finalize Daily Buckets
+## 5.4) Finalize Daily Buckets
 `POST /v1/buckets/finalize`
 
 **Content-Type**: `application/json`
@@ -332,6 +448,7 @@ Fields:
 - `facebankId` (required)
 - `facebankVersion` (required, int)
 - `score` (required, float)
+- `threshold` (optional, float)
 - `isSuccess` (required, bool)
 - `userFeedback` (required, bool)
 - `timestamp` (optional, ISO8601)

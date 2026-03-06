@@ -22,18 +22,25 @@
 분리 원칙 (현재 권장 운영):
 - `facebank` 데이터(`sync-images`, `trials`)는 `Face Verification 앱` 전용으로 사용
 - `Semi-Auto Classification 앱`은 `facebank`를 사용하지 않음
-- `Semi-Auto Classification 앱`의 exemplar(등록 기준 데이터)는 `POST /v1/ingest` + `POST /v1/labels`로 구축
+- `Semi-Auto Classification 앱`의 exemplar(등록 기준 데이터)는 `POST/GET/PATCH/DELETE /v1/exemplars`로 관리
 
 ### 앱별 엔드포인트 요약 (빠른 참조)
 
 | Endpoint | Face Verification 앱 | Semi-Auto Classification 앱 | 비고 |
 | :--- | :---: | :---: | :--- |
 | `GET /v1/health` | O | O | 서버 연결/상태 확인 |
+| `GET /v1/health/qdrant` | O | O | Qdrant 컬렉션/포인트/벡터 샘플 상태 |
+| `GET /v1/daycares` | - | O | daycare 목록/요약 조회 (관리자) |
+| `DELETE /v1/daycares/{daycare_id}` | - | O | daycare 단위 DB+스토리지 초기화 (관리자) |
 | `POST /v1/embed` | O | (선택) | Verification의 Remote embedding |
 | `POST /v1/embed/batch` | - | - | 운영 플로우보단 도구/테스트 성격 |
 | `POST /v1/ingest` | - | O | 이미지 인입 + 검출 + 임베딩 |
 | `POST /v1/search` | - | (간접/실험) | 기존 gallery 검색 API |
 | `POST /v1/labels` | (선택) O | O | 분류 앱 핵심. Verification은 서버 라벨 동기화 시에만 |
+| `GET /v1/exemplars` | - | O | 초기 등록 이미지(Exemplar) 조회/검색 |
+| `POST /v1/exemplars` | - | O | 초기 등록 이미지(Exemplar) 등록 |
+| `PATCH /v1/exemplars/{instance_id}` | - | O | 초기 등록 이미지(Exemplar) 수정 |
+| `DELETE /v1/exemplars/{instance_id}` | - | O | 초기 등록 이미지(Exemplar) 해제 |
 | `GET /v1/images` | - | O | 갤러리 조회 |
 | `GET /v1/images/{image_id}` | - | O | 이미지 바이트 조회 |
 | `GET /v1/images/{image_id}/meta` | (선택) O | O | 분류 앱 핵심. Verification은 서버 라벨 동기화 시 선택 |
@@ -85,6 +92,32 @@
 
 비고:
 - 모델 미초기화 시 `model`은 `null`일 수 있습니다.
+
+### `GET /v1/health/qdrant`
+Qdrant 상태 확인 (컬렉션/포인트/벡터 샘플)
+
+사용 앱:
+- 공통 (운영/디버깅)
+
+응답 예시:
+```json
+{
+  "status": "ok",
+  "qdrant": {
+    "collection": "pet_instances_v1",
+    "points_count": 6,
+    "sampled_points": 6,
+    "sampled_with_vector": 6,
+    "sampled_has_vector": true,
+    "sampled_vector_dim": 2152,
+    "status": "green"
+  }
+}
+```
+
+비고:
+- 일부 Qdrant 빌드에서는 `vectors_count`, `indexed_vectors_count`가 `null/0`로 보일 수 있습니다.
+- 실제 벡터 저장 여부는 `sampled_has_vector`, `sampled_with_vector`를 우선 확인하세요.
 
 ## 2. 임베딩 (DB 저장 없음)
 
@@ -178,6 +211,8 @@ Form Fields:
 - `daycare_id` (required, string)
 - `trainer_id` (optional, string)
 - `captured_at` (optional, string, ISO8601)
+- `image_role` (optional, `DAILY | SEED`, default=`DAILY`)
+- `pet_name` (optional, string): `image_role=SEED`일 때 seed 하위 폴더명으로 사용
 
 응답 개요:
 - `image`: 업로드 이미지 메타
@@ -189,9 +224,10 @@ Form Fields:
   "image": {
     "image_id": "img_xxx",
     "daycare_id": "dc_001",
+    "image_role": "DAILY",
     "width": 1280,
     "height": 720,
-    "storage_path": "data/images/img_xxx.jpg"
+    "storage_path": "data/images/daily/img_xxx.jpg"
   },
   "instances": [
     {
@@ -209,6 +245,15 @@ Form Fields:
 - `400`: 잘못된 `captured_at`, 이미지 파싱 실패
 - `413`: 업로드 크기 초과
 - `503`: 모델/검출기/벡터DB 미준비
+
+저장 경로 비고:
+- DAILY: `data/images/daily/*`, `data/thumbs/daily/*`
+- SEED: `data/images/seed/{pet_name}/*`, `data/thumbs/seed/{pet_name}/*`
+
+SEED 정책:
+- `image_role=SEED`는 이미지당 1개 인스턴스만 저장합니다.
+- 검출이 여러 개면 `confidence` 최고 인스턴스 1개만 임베딩/저장됩니다.
+- `image_role=DAILY`는 multi-instance를 유지합니다.
 
 ## 4. 검색 (갤러리 정렬)
 
@@ -324,6 +369,10 @@ Form Fields:
 
 Query Parameters:
 - `daycare_id` (required, string)
+- `date` (optional, string): `YYYY-MM-DD` (UTC)
+- `tab` (optional): `ALL | UNCLASSIFIED | PET` (default `ALL`)
+- `pet_id` (optional): `tab=PET`일 때 사용
+- `include_seed` (optional, bool, default `false`)
 - `limit` (optional, int, default=200)
 - `offset` (optional, int, default=0)
 
@@ -336,9 +385,11 @@ Query Parameters:
     {
       "image_id": "img_...",
       "daycare_id": "dc_001",
+      "image_role": "DAILY",
       "raw_url": "/v1/images/img_xxx?variant=raw",
       "thumb_url": "/v1/images/img_xxx?variant=thumb",
-      "instance_count": 3
+      "instance_count": 3,
+      "pet_ids": ["pet_pomi"]
     }
   ]
 }
@@ -420,11 +471,116 @@ Query Parameters:
 ```
 
 비고:
+- `/v1/pets`는 Qdrant payload를 직접 조회해 `pet_id`와 `seed_pet_id`를 집계합니다.
 - `pet_name`은 `storage_dir/pets` 디렉터리 구조를 기반으로 추론됩니다.
 - Classification 앱에서는 PET 탭/라벨링 대상 선택의 기준 목록으로 사용합니다.
 - Verification 앱에서 사용할 경우, 서버 기준 pet 목록 동기화 UI 용도로만 사용하는 것을 권장합니다.
 
-## 8. Facebank 이미지 동기화 (해시 기반 중복 제거)
+## 7.1 daycare 목록/초기화 (관리자)
+
+### `GET /v1/daycares`
+Qdrant 기준 daycare 목록/요약 조회
+
+사용 앱:
+- Semi-Auto Classification 관리자 Dashboard
+
+Query Parameters:
+- `q` (optional, string): daycare_id 부분검색
+- `limit` (optional, int, default=200)
+- `offset` (optional, int, default=0)
+
+응답 예시:
+```json
+{
+  "count": 1,
+  "items": [
+    {
+      "daycare_id": "dc_001",
+      "image_count": 18,
+      "instance_count": 25,
+      "seed_image_count": 5,
+      "daily_image_count": 13,
+      "pet_count": 5,
+      "last_captured_at": "2026-03-06T09:00:00Z"
+    }
+  ]
+}
+```
+
+### `DELETE /v1/daycares/{daycare_id}`
+daycare 단위 테스트 초기화 (Qdrant + storage)
+
+사용 앱:
+- Semi-Auto Classification 관리자 Dashboard
+
+Query Parameters:
+- `delete_qdrant` (optional, bool, default=true)
+- `delete_storage` (optional, bool, default=true)
+
+비고:
+- 파괴적 작업이며 복구 불가입니다.
+
+## 8. 초기 등록 이미지(Exemplar) 관리
+
+### `GET /v1/exemplars`
+관리자용 초기 등록 이미지 목록 조회/검색
+
+사용 앱:
+- Semi-Auto Classification 관리자 Dashboard (핵심)
+
+Query Parameters:
+- `daycare_id` (required, string)
+- `pet_id` (optional, string)
+- `species` (optional, `DOG | CAT`)
+- `active` (optional, bool, default `true`)
+- `q` (optional, string): `instance_id`, `image_id`, `pet_id`, `note` 부분 검색
+- `limit` / `offset` (optional)
+
+### `POST /v1/exemplars`
+인스턴스를 초기 등록 이미지로 지정 (다건 등록 지원)
+
+핵심 동작:
+- `is_seed=true`, `seed_pet_id`, `seed_active` 등 exemplar 필드를 설정
+- 옵션으로 `pet_id`, `assignment_status=ACCEPTED` 라벨 동기화 가능
+
+### `POST /v1/exemplars/upload`
+빠른 등록 API (이미지 업로드 + pet_name 입력)
+
+핵심 동작:
+- 내부적으로 `ingest` 수행 후 exemplar 등록까지 한 번에 처리
+- 기본값으로 최고 confidence 인스턴스 1개를 등록
+- `apply_to_all_instances=true` 시 검출된 모든 인스턴스를 등록
+
+비고:
+- quick 모드에서는 `pet_name`을 `pet_id`로 매핑 (이름 중복 없음 가정)
+
+### `POST /v1/exemplars/upload-folder`
+폴더 일괄 등록 API (폴더명 = pet_name)
+
+요청 방식:
+- `multipart/form-data`
+- `files`(반복), `relative_paths`(반복, files와 동일 순서)
+- `daycare_id` 필수
+
+경로 규칙:
+- `루트/pet_name/파일`
+- 또는 `pet_name/파일`
+
+동작:
+- 각 파일마다 `ingest` 수행 후 exemplar 등록
+- 파일별 성공/실패 결과를 요약 응답으로 반환
+
+### `PATCH /v1/exemplars/{instance_id}`
+초기 등록 이미지 속성 수정 (`pet_id`, `active`, `rank`, `note`)
+
+### `DELETE /v1/exemplars/{instance_id}`
+초기 등록 이미지 지정 해제 (`is_seed=false`)
+
+비고:
+- 반자동 자동분류(`/v1/classify/auto`)는 이 Exemplar 풀만 참조합니다.
+- Facebank(`sync-images`)와는 별도 자원입니다.
+
+## 9. Facebank 이미지 동기화 (해시 기반 중복 제거)
 
 ### `GET /v1/sync-images`
 클라이언트가 가진 facebank 이미지 해시 중 서버에 이미 있는 항목 조회
@@ -464,8 +620,8 @@ Query Parameters:
 - Face Verification 앱 (핵심)
 
 비고:
-- 서버에 facebank 원본/해시/메타를 저장하지만, 이 데이터만으로는 Classification용 exemplar(Qdrant 라벨 데이터)가 생성되지 않습니다.
-- Semi-Auto Classification 앱의 초기 exemplar 구축은 `/v1/ingest` + `/v1/labels`를 사용합니다.
+- 서버에 facebank 원본/해시/메타를 저장하지만, 이 데이터만으로는 Classification용 exemplar(`is_seed`)가 생성되지 않습니다.
+- Semi-Auto Classification 앱의 초기 exemplar는 `/v1/exemplars` API로 별도 관리합니다.
 
 - Content-Type: `multipart/form-data`
 
@@ -529,6 +685,7 @@ Form Fields:
 - `facebankId` (required, string)
 - `facebankVersion` (required, int)
 - `score` (required, float)
+- `threshold` (optional, float)
 - `isSuccess` (required, bool)
 - `userFeedback` (required, bool)
 - `timestamp` (optional, string): ISO8601 (`Z` 허용)
@@ -581,7 +738,7 @@ Form Fields:
 - Semi-Auto Classification 앱 (핵심)
 
 비고:
-- 동작 전제: Qdrant에 `pet_id`가 라벨된 exemplar 인스턴스가 존재해야 합니다.
+- 동작 전제: Qdrant에 `is_seed=true`, `seed_pet_id`가 설정된 exemplar 인스턴스가 존재해야 합니다.
 - facebank 동기화 데이터는 직접 사용하지 않습니다.
 
 - Content-Type: `application/json`

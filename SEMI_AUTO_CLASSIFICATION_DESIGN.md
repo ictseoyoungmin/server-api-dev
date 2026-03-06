@@ -1,180 +1,131 @@
-# Semi-Auto Classification Design (PoC -> v1.1)
+# Semi-Auto Classification Design (PoC -> v2.0)
 
 ## 1. Goal
-Build a semi-automatic daily photo classification flow for daycare trainers.
+Build a semi-automatic daily photo classification flow for daycare trainers, with a clear admin-managed exemplar lifecycle.
 
 - Daily photos: ~2,000 images.
 - One image may contain multiple pets.
 - Initial auto-classification target: >= 85% precision at accepted predictions.
 - Human-in-the-loop: trainer confirms includes and removes wrong assignments.
+- Admin-in-the-loop: exemplar quality is curated in a dedicated dashboard.
 
 ## 2. Current State (from this repo)
 
-Existing APIs already cover the core blocks:
+Core APIs:
 - `POST /v1/ingest`: detect + embed + store instance vectors.
-- `POST /v1/search`: instance-vector similarity search.
-- `POST /v1/labels`: write `instance_id -> pet_id` to Qdrant payload.
-- `GET /v1/images`, `GET /v1/images/{id}/meta`: gallery from local sidecar JSON.
+- `POST /v1/labels`: write `instance_id -> pet_id` assignments.
+- `GET /v1/images`, `GET /v1/images/{id}/meta`: gallery + sidecar metadata.
+- `POST /v1/classify/auto`: date-scope auto classification.
+- `POST /v1/classify/similar`: tab-constrained similarity sort.
+- `POST /v1/buckets/finalize`, `GET /v1/buckets/...`: daily bucket finalization.
 
-Current gaps for semi-auto workflow:
-- No explicit assignment state machine (unreviewed/accepted/rejected).
-- No date-tab workflow API (all / unclassified / per-pet).
-- No "similar image search within current tab" endpoint.
-- Label writes in Qdrant are not reflected in image sidecar metadata.
+New architecture requirement:
+- Exemplar selection must be independent from daily labeling outcomes.
+- Exemplar CRUD/search must be first-class for admin dashboard workflows.
 
 ## 3. Domain Model
 
 ### 3.1 Entities
-- `Pet`: registered pet identity in daycare.
+- `Pet`: registered identity in daycare.
 - `Photo`: uploaded trainer image (`image_id`), date-bound.
 - `Instance`: detected object in one photo (`instance_id`), has one embedding vector.
-- `Assignment`: link from one `instance_id` to one `pet_id` with source and status.
+- `Assignment`: per-instance daily labeling state.
+- `Exemplar`: admin-curated registration sample used by auto-classifier.
 
 ### 3.2 Assignment State
-Use per-instance state in Qdrant payload:
+Qdrant payload fields:
 - `assignment_status`: `UNREVIEWED | ACCEPTED | REJECTED`
-- `pet_id`: currently selected pet (nullable)
-- `auto_pet_id`: auto model proposal (nullable)
-- `auto_score`: similarity score for auto proposal (nullable)
-- `label_source`: `AUTO | MANUAL`
-- `label_confidence`: float
-- `labeled_at_ts`, `labeled_by`
+- `pet_id`: selected pet for assignment (nullable)
+- `auto_pet_id`, `auto_score`
+- `label_source`: `AUTO | MANUAL | PROPAGATED`
+- `label_confidence`, `labeled_at_ts`, `labeled_by`
 
-### 3.3 Recommended Threshold Policy
-Per daycare profile (configurable):
-- `auto_accept_threshold` (example: 0.78)
-- `candidate_threshold` (example: 0.62)
+### 3.3 Exemplar State
+Qdrant payload fields:
+- `is_seed`: bool
+- `seed_pet_id`: canonical pet identity for matching
+- `seed_active`: bool
+- `seed_rank`: optional ordering priority
+- `seed_note`: optional admin note
+- `seed_created_at_ts`, `seed_created_by`
+- `seed_updated_at_ts`, `seed_updated_by`
+
+### 3.4 Threshold Policy
+Per daycare profile:
+- `auto_accept_threshold` (ex: 0.78)
+- `candidate_threshold` (ex: 0.62)
 
 Decision:
-- score >= auto_accept_threshold: set `ACCEPTED` with `label_source=AUTO`.
-- candidate_threshold <= score < auto_accept_threshold: set `UNREVIEWED` with candidate.
-- score < candidate_threshold: keep `UNREVIEWED` and no candidate.
+- `score >= auto_accept_threshold`: `ACCEPTED` + `pet_id` write.
+- `candidate_threshold <= score < auto_accept_threshold`: candidate only (`UNREVIEWED`).
+- lower than candidate threshold: keep `UNREVIEWED`.
 
 ## 4. API Design
 
-## 4.1 Keep Existing APIs (with small extension)
+### 4.1 Exemplar Management (Admin)
+- `GET /v1/exemplars`: list/search exemplars (`daycare_id`, `pet_id`, `species`, `active`, `q`, paging).
+- `POST /v1/exemplars`: register one or more instance IDs as exemplars.
+- `PATCH /v1/exemplars/{instance_id}`: update exemplar metadata.
+- `DELETE /v1/exemplars/{instance_id}`: remove exemplar status from instance.
 
-1) `POST /v1/labels` (extend)
-- Add optional fields in assignment item:
-  - `action`: `ACCEPT | REJECT | CLEAR`
-  - `reason` (optional)
-- Behavior:
-  - `ACCEPT`: set `pet_id`, `assignment_status=ACCEPTED`.
-  - `REJECT`: clear `pet_id`, set `assignment_status=REJECTED`.
-  - `CLEAR`: clear decision, set `assignment_status=UNREVIEWED`.
-
-2) `GET /v1/images` (extend query)
-- New optional query params:
-  - `date` (YYYY-MM-DD)
-  - `tab`: `ALL | UNCLASSIFIED | PET`
-  - `pet_id` (required when `tab=PET`)
-- Return only images matching the tab rule (based on instance assignments).
-
-## 4.2 New APIs
-
-1) `POST /v1/classify/auto`
-- Purpose: run automatic candidate assignment for a date scope.
-- Request:
-  - `daycare_id`, `date`, optional `pet_ids`, optional thresholds override.
-- Response:
-  - counts: scanned instances, accepted, unreviewed, unchanged.
-
-2) `POST /v1/classify/similar`
-- Purpose: "find similar images" inside currently visible tab.
-- Request:
-  - `daycare_id`, `date`, `tab`, `pet_id?`, `query_instance_ids[]`, `limit`.
-- Behavior:
-  - resolve vectors from `query_instance_ids`.
-  - search within tab-constrained candidate set.
-  - return reordered image list by score.
-
-3) `POST /v1/buckets/finalize`
-- Purpose: lock daily send buckets per pet.
-- Request:
-  - `daycare_id`, `date`, optional `pet_ids`.
-- Output:
-  - per-pet finalized image ids + counts.
-  - persisted manifest path.
-
-4) `GET /v1/buckets/{daycare_id}/{date}`
-- Purpose: read finalized bucket manifests.
+### 4.2 Daily Classification (Trainer)
+- `POST /v1/classify/auto`
+  - Target: unclassified instances on the date.
+  - Exemplar source: only points where `is_seed=true`, `seed_active=true`, `seed_pet_id` exists.
+- `POST /v1/classify/similar`
+- `POST /v1/labels`
+- `POST /v1/buckets/finalize`
+- `GET /v1/buckets/{daycare_id}/{date}`
 
 ## 5. Storage and Sync Rules
 
-## 5.1 Source of truth
-- Assignment truth: Qdrant payload fields.
-- Image sidecar JSON remains cache/view model.
+### 5.1 Source of Truth
+- Assignment truth: Qdrant payload (`pet_id`, `assignment_status`, ...).
+- Exemplar truth: Qdrant payload (`is_seed`, `seed_*`).
+- Sidecar JSON (`data/meta/*.json`): view/cache model for gallery APIs.
 
-## 5.2 Sidecar sync
-When label/classification changes are written, update `data/meta/{image_id}.json` instance fields:
-- `pet_id`, `assignment_status`, `label_source`, `label_confidence`, `labeled_at_ts`.
+### 5.2 Sidecar Sync
+When assignment fields change, mirror into `data/meta/{image_id}.json`:
+- `pet_id`, `assignment_status`, `label_source`, `label_confidence`, `labeled_at_ts`, `labeled_by`.
 
-This prevents UI mismatch between `/images/*` and Qdrant state.
+Exemplar fields are intentionally not required in sidecar for trainer gallery flow.
 
-## 6. Backend File-Level Change Plan
+## 6. Backend Change Plan
 
-## 6.1 Schemas
-Add files:
-- `app/schemas/classification.py`
-  - auto-classify request/response
-  - similar-search request/response
-  - finalize request/response
+### 6.1 Schemas
+- Add `app/schemas/exemplars.py` for exemplar CRUD/search contracts.
 
-Modify:
-- `app/schemas/labels.py`
-  - add `action`, `reason`.
-- `app/schemas/images.py`
-  - add tab/date filters in query model (if introduced).
+### 6.2 Endpoints
+- Add `app/api/v1/endpoints/exemplars.py`:
+  - `GET/POST /exemplars`
+  - `PATCH/DELETE /exemplars/{instance_id}`
+- Update `app/api/v1/router.py` to register `exemplars` router.
+- Update `app/api/v1/endpoints/classification.py` to use seed-only exemplar policy.
 
-## 6.2 Endpoints
-Add file:
-- `app/api/v1/endpoints/classification.py`
-  - `/classify/auto`
-  - `/classify/similar`
-  - `/buckets/finalize`
-  - `/buckets/{daycare_id}/{date}`
+### 6.3 Vector Store Utilities
+- Extend `app/vector_db/qdrant_store.py` with payload retrieval helper by `instance_id`.
 
-Modify:
-- `app/api/v1/endpoints/labels.py`
-  - state-machine-aware write logic.
-- `app/api/v1/endpoints/images.py`
-  - tab/date/pet filtering.
-- `app/api/v1/router.py`
-  - register `classification` router.
+## 7. Rollout Plan
 
-## 6.3 Vector store utilities
-Modify:
-- `app/vector_db/qdrant_store.py`
-  - helper to scroll by filters (date/daycare/tab) for batch ops.
-  - helper to bulk set payload for assignment updates.
+1) Exemplar domain introduction
+- Add exemplar payload fields and CRUD endpoints.
+- Keep existing labeling APIs stable.
 
-## 7. Rollout in 3 Steps
+2) Auto-classifier switch
+- Move exemplar selection from implicit labeled pool to explicit seed pool.
+- Update operations runbook (exemplar registration prerequisite).
 
-1) Step A (minimal shippable)
-- Extend `/labels` with `action` state logic.
-- Extend `/images` with `date/tab/pet_id` filtering.
-- Keep manual process; no new auto endpoint yet.
-
-2) Step B (automation)
-- Add `/classify/auto` using existing similarity search primitives.
-- Persist `auto_pet_id`, `auto_score`, `assignment_status`.
-
-3) Step C (trainer productivity)
-- Add `/classify/similar` and bucket finalize/read APIs.
-- Add metrics logging for precision and correction workload.
+3) Admin dashboard integration
+- Build web GUI for add/update/delete/search on `/v1/exemplars`.
+- Add audit/quality metrics for exemplar drift.
 
 ## 8. Success Metrics
-Track daily:
 - accepted-auto precision
 - unreviewed ratio
 - manual correction rate
 - avg correction actions per 100 images
-- per-pet bucket completeness before send
+- per-pet bucket completeness
+- exemplar freshness/coverage per pet
 
-## 9. Immediate Implementation Recommendation
-Start with Step A first. It has low risk, reuses current architecture, and unlocks the UI tabs:
-- `ALL`
-- `UNCLASSIFIED`
-- `PET`
-
-After Step A is merged, implement Step B in the next patch.
+## 9. Implementation Recommendation
+Adopt exemplar CRUD first, then enforce seed-only auto-classification in production. This keeps trainer workflows stable while enabling admin governance in parallel.
