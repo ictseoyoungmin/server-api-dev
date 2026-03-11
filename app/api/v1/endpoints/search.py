@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
+from app.core.config import settings
 from app.schemas.ingest import BBox
 from app.schemas.search import (
     BestMatch,
@@ -30,6 +32,8 @@ def _get_store(request: Request) -> QdrantStore:
 def _to_ts(dt: Optional[datetime]) -> Optional[int]:
     if dt is None:
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo(settings.business_tz))
     return int(dt.timestamp())
 
 

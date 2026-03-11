@@ -1,7 +1,29 @@
-source /workspace/PoC/dogface_fastapi_poc_qdrant/.envqd/bin/activate
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_DIR="${VENV_DIR:-${SCRIPT_DIR}/.envqd}"
+ENV_FILE="${ENV_FILE:-${SCRIPT_DIR}/.env}"
+
+if [[ ! -f "${VENV_DIR}/bin/activate" ]]; then
+  echo "venv activate script not found: ${VENV_DIR}/bin/activate"
+  echo "Run ./setup_env.sh first, or set VENV_DIR."
+  exit 1
+fi
+source "${VENV_DIR}/bin/activate"
 
 set -a
-source /workspace/PoC/dogface_fastapi_poc_qdrant/.env
+if [[ -f "${ENV_FILE}" ]]; then
+  source "${ENV_FILE}"
+else
+  echo "env file not found: ${ENV_FILE} (continue without it)"
+fi
 set +a
 
-uvicorn app.main:app --host 0.0.0.0 --port 8001
+# Default process timezone (override by pre-setting TZ before running this script).
+: "${TZ:=Asia/Seoul}"
+export TZ
+
+HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-8001}"
+exec uvicorn app.main:app --host "${HOST}" --port "${PORT}"

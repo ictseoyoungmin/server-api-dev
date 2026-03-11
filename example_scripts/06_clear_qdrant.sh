@@ -60,7 +60,6 @@ if [[ "${1:-}" == "--hard" ]]; then
   fi
   echo "[FAIL] Collection delete failed: ${msg}"
   exit 1
-  exit 0
 fi
 
 echo "[INFO] Soft clear: deleting all points in collection '${QDRANT_COLLECTION}'"

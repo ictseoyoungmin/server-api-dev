@@ -9,6 +9,44 @@ import torch
 logger = logging.getLogger(__name__)
 
 
+def _resolve_hf_local_source(source: str) -> str:
+    """Resolve a HuggingFace local cache path to a loadable snapshot directory.
+
+    Handles inputs like:
+      /.../.cache/hf/models--org--repo
+    by mapping to:
+      /.../.cache/hf/models--org--repo/snapshots/<revision>
+    """
+
+    p = Path(source)
+    if not p.exists() or not p.is_dir():
+        return source
+
+    # Already a concrete model directory.
+    if (p / "config.json").exists():
+        return str(p)
+
+    snapshots_dir = p / "snapshots"
+    refs_main = p / "refs" / "main"
+    if not snapshots_dir.exists() or not snapshots_dir.is_dir():
+        return source
+
+    # Prefer the revision pointed by refs/main if available.
+    if refs_main.exists():
+        rev = refs_main.read_text(encoding="utf-8").strip()
+        if rev:
+            candidate = snapshots_dir / rev
+            if (candidate / "config.json").exists():
+                return str(candidate)
+
+    # Fallback: choose the newest snapshot that has config.json.
+    candidates = [d for d in snapshots_dir.iterdir() if d.is_dir() and (d / "config.json").exists()]
+    if not candidates:
+        return source
+    candidates.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+    return str(candidates[0])
+
+
 def load_embedding_model(model_name: str, cache_dir: Path, miewid_model_source: str = "conservationxlabs/miewid-msv3") -> torch.nn.Module:
     """Load an embedding model.
 
@@ -27,10 +65,15 @@ def load_embedding_model(model_name: str, cache_dir: Path, miewid_model_source: 
     if name == "miewid":
         from transformers import AutoModel
 
-        logger.info("Loading miewid model from HuggingFace (cached at %s)", cache_dir)
+        resolved_source = _resolve_hf_local_source(miewid_model_source)
+        logger.info(
+            "Loading miewid model from HuggingFace/local source=%s (cached at %s)",
+            resolved_source,
+            cache_dir,
+        )
         # trust_remote_code=True is needed by the model repo.
         model = AutoModel.from_pretrained(
-            miewid_model_source,
+            resolved_source,
             trust_remote_code=True,
             cache_dir=str(cache_dir),
         )

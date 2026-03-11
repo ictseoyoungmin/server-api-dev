@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from starlette.concurrency import run_in_threadpool
@@ -25,7 +26,10 @@ def _parse_timestamp(ts: Optional[str]) -> datetime:
     if not ts:
         return _utcnow()
     try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=ZoneInfo(settings.business_tz))
+        return parsed
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid timestamp: {ts}") from e
 
@@ -48,7 +52,7 @@ def _safe_folder_name(name: Optional[str]) -> str:
 
 def _trial_dir(ts: datetime) -> Path:
     date_str = ts.date().isoformat()
-    return Path(settings.storage_dir) / "trials" / date_str
+    return Path(settings.verification_storage_dir) / "trials" / date_str
 
 
 def _trial_paths(trial_id: str, ts: datetime) -> tuple[Path, Path]:
@@ -59,7 +63,7 @@ def _trial_paths(trial_id: str, ts: datetime) -> tuple[Path, Path]:
 def _pet_trial_paths(trial_id: str, ts: datetime, pet_id: str, pet_name: str) -> tuple[Path, Path]:
     date_str = ts.date().isoformat()
     base = (
-        Path(settings.storage_dir)
+        Path(settings.verification_storage_dir)
         / "pets"
         / pet_id
         / _safe_folder_name(pet_name)

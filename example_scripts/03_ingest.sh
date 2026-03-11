@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 API_BASE="${API_BASE:-http://localhost:8001}"
 IMG="${IMG:-}"
-DEFAULT_IMG="/workspace/PoC/dogface_fastapi_poc/test_images/images.jpg"
+DEFAULT_IMG="${DEFAULT_IMG:-}"
 DAYCARE_ID="${DAYCARE_ID:-dc_001}"
 TRAINER_ID="${TRAINER_ID:-}"
 CAPTURED_AT="${CAPTURED_AT:-}"
 INCLUDE_EMB="${INCLUDE_EMB:-true}"
-STATE_FILE="${STATE_FILE:-/workspace/PoC/dogface_fastapi_poc_qdrant/example_scripts/last_ingest.json}"
+STATE_FILE="${STATE_FILE:-${SCRIPT_DIR}/last_ingest.json}"
+
+if [ -z "${DEFAULT_IMG}" ]; then
+  DEFAULT_IMG="$(find "${PROJECT_ROOT}/data/images_for_test" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) 2>/dev/null | sort | head -n 1 || true)"
+fi
 
 if [ -z "${IMG}" ] && [ -f "${DEFAULT_IMG}" ]; then
   IMG="${DEFAULT_IMG}"

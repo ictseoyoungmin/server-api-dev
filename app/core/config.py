@@ -23,11 +23,35 @@ class Settings(BaseSettings):
     app_name: str = "dogface-embedding-api"
     api_prefix: str = "/v1"
     log_level: str = "INFO"
+    log_tz: str = Field(
+        default="UTC",
+        description="Timezone label for app log formatter. Example: UTC, Asia/Seoul, KST",
+    )
+    log_tz_offset: Optional[str] = Field(
+        default=None,
+        description="Explicit log timezone offset. Example: +09:00, -05:30",
+    )
+    business_tz: str = Field(
+        default="Asia/Seoul",
+        description="Business timezone for date-based filters and naive captured_at parsing.",
+    )
 
     # Storage
     storage_dir: Path = Field(
         default=Path("./data"),
-        description="Local storage directory for raw images/crops (PoC).",
+        description="Legacy base storage directory.",
+    )
+    reid_storage_dir: Path = Field(
+        default=Path("./data/reid"),
+        description="Storage root for Re-ID APIs (ingest/images/classify/exemplars).",
+    )
+    verification_storage_dir: Path = Field(
+        default=Path("./data/verification"),
+        description="Storage root for verification APIs (sync-images/trials).",
+    )
+    shared_storage_dir: Path = Field(
+        default=Path("./data/shared"),
+        description="Storage root for shared resources (registry/migrations).",
     )
     thumbnail_max_side_px: int = Field(
         default=512,
@@ -48,6 +72,30 @@ class Settings(BaseSettings):
     miewid_finetune_ckpt_path: Optional[Path] = Field(
         default=None,
         description="Optional Lightning finetune checkpoint path. If set, loads backbone+embed+bn from ckpt.",
+    )
+    verification_model_name: str = Field(
+        default="miewid",
+        description="Embedding model selector for verification APIs.",
+    )
+    verification_miewid_model_source: str = Field(
+        default="conservationxlabs/miewid-msv3",
+        description="HF/local model source for verification miewid load.",
+    )
+    verification_miewid_finetune_ckpt_path: Optional[Path] = Field(
+        default=None,
+        description="Optional verification miewid finetune checkpoint path.",
+    )
+    reid_model_name: str = Field(
+        default="miewid",
+        description="Embedding model selector for Re-ID ingest/classification.",
+    )
+    reid_miewid_model_source: str = Field(
+        default="conservationxlabs/miewid-msv3",
+        description="HF/local model source for Re-ID miewid load.",
+    )
+    reid_miewid_finetune_ckpt_path: Optional[Path] = Field(
+        default=None,
+        description="Optional Re-ID miewid finetune checkpoint path.",
     )
     hf_cache_dir: Path = Field(
         default=Path("./weights"),

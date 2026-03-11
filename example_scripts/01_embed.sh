@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 API_BASE="${API_BASE:-http://localhost:8001}"
 FORMAT="${FORMAT:-json}"
 IMG="${IMG:-}"
-DEFAULT_IMG="/workspace/PoC/dogface_fastapi_poc/test_images/a.png"
+DEFAULT_IMG="${DEFAULT_IMG:-}"
+
+if [ -z "${DEFAULT_IMG}" ]; then
+  DEFAULT_IMG="$(find "${PROJECT_ROOT}/data/images_for_test" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) 2>/dev/null | sort | head -n 1 || true)"
+fi
 
 if [ -z "${IMG}" ] && [ -f "${DEFAULT_IMG}" ]; then
   IMG="${DEFAULT_IMG}"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Dict
 
@@ -22,28 +23,23 @@ def _get_store(request: Request) -> QdrantStore:
     return store
 
 
-def _read_pet_name_map() -> Dict[str, str]:
-    """Load pet_id -> pet_name mapping from storage_dir/pets layout."""
-    pets_root = Path(settings.storage_dir) / "pets"
-    if not pets_root.exists():
+def _read_pet_name_map(daycare_id: str) -> Dict[str, str]:
+    """Load optional daycare-scoped pet_id -> pet_name mapping from shared registry."""
+    p = Path(settings.shared_storage_dir) / "registry" / "pets" / f"{daycare_id}.json"
+    if not p.exists():
         return {}
-
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
     out: Dict[str, str] = {}
-    for pet_dir in pets_root.iterdir():
-        if not pet_dir.is_dir():
-            continue
-        pet_id = pet_dir.name
-        candidates = [c for c in pet_dir.iterdir() if c.is_dir()]
-        if not candidates:
-            continue
-        # Preferred: human-readable pet-name folder (contains facebanks/trials)
-        for c in candidates:
-            has_expected = (c / "facebanks").exists() or (c / "trials").exists()
-            if has_expected:
-                out[pet_id] = c.name
-                break
-        if pet_id not in out:
-            out[pet_id] = candidates[0].name
+    for k, v in data.items():
+        pet_id = str(k or "").strip()
+        pet_name = str(v or "").strip()
+        if pet_id and pet_name:
+            out[pet_id] = pet_name
     return out
 
 
@@ -51,7 +47,7 @@ def _read_pet_name_map() -> Dict[str, str]:
 async def list_pets(request: Request, daycare_id: str = Query(...)):
     """List pet IDs used in this daycare, with optional display names."""
     store = _get_store(request)
-    pet_name_map = _read_pet_name_map()
+    pet_name_map = _read_pet_name_map(daycare_id)
     agg: Dict[str, dict] = {}
 
     qf = build_filter(daycare_id=daycare_id)
@@ -68,18 +64,17 @@ async def list_pets(request: Request, daycare_id: str = Query(...)):
         if pet_id_seed:
             pet_ids.add(pet_id_seed)
 
+        payload_pet_name = str(payload.get("pet_name") or "").strip() or None
         for pet_id in pet_ids:
             item = agg.setdefault(
                 pet_id,
                 {"pet_id": pet_id, "pet_name": pet_name_map.get(pet_id), "images": set(), "instances": 0},
             )
+            if item.get("pet_name") in (None, "") and payload_pet_name:
+                item["pet_name"] = payload_pet_name
             if image_id:
                 item["images"].add(image_id)
             item["instances"] += 1
-
-    # Fallback: include storage_dir/pets entries even if no labeled meta yet.
-    for pet_id, pet_name in pet_name_map.items():
-        agg.setdefault(pet_id, {"pet_id": pet_id, "pet_name": pet_name, "images": set(), "instances": 0})
 
     items = [
         PetListItem(

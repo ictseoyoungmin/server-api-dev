@@ -17,7 +17,18 @@ from app.utils.image_io import load_pil_image
 router = APIRouter()
 
 
-def _get_embedder(request: Request):
+def _get_embedder(request: Request, profile: str):
+    normalized = profile.strip().lower()
+    if normalized not in ("verification", "reid"):
+        raise HTTPException(status_code=400, detail=f"Invalid profile: {profile}")
+
+    embedders = getattr(request.app.state, "embedders", None)
+    if isinstance(embedders, dict):
+        embedder = embedders.get(normalized)
+        if embedder is not None:
+            return embedder
+
+    # Backward compatibility.
     embedder = getattr(request.app.state, "embedder", None)
     if embedder is None:
         raise HTTPException(status_code=503, detail="Model not ready")
@@ -28,6 +39,10 @@ def _get_embedder(request: Request):
 async def embed_one(
     request: Request,
     file: UploadFile = File(...),
+    profile: str = Query(
+        default="verification",
+        description="Embedding profile: verification|reid",
+    ),
     format: Optional[str] = Query(
         default=None,
         description="Response format: json|f32|f16 (default from server settings)",
@@ -35,7 +50,7 @@ async def embed_one(
 ):
     """Generate an L2-normalized embedding for a single image."""
 
-    embedder = _get_embedder(request)
+    embedder = _get_embedder(request, profile=profile)
     fmt = (format or settings.response_format).lower()
     if fmt not in ("json", "f32", "f16"):
         raise HTTPException(status_code=400, detail=f"Invalid format: {fmt}")
@@ -75,6 +90,10 @@ async def embed_one(
 async def embed_batch(
     request: Request,
     files: List[UploadFile] = File(...),
+    profile: str = Query(
+        default="verification",
+        description="Embedding profile: verification|reid",
+    ),
     format: Optional[str] = Query(
         default=None,
         description="Response format: json|f32|f16 (default from server settings)",
@@ -87,7 +106,7 @@ async def embed_batch(
       - For higher throughput, use format=f16 or f32 (binary framed response).
     """
 
-    embedder = _get_embedder(request)
+    embedder = _get_embedder(request, profile=profile)
     fmt = (format or settings.response_format).lower()
     if fmt not in ("json", "f32", "f16"):
         raise HTTPException(status_code=400, detail=f"Invalid format: {fmt}")

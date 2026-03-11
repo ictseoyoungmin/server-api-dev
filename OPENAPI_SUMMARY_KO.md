@@ -132,6 +132,7 @@ Qdrant 상태 확인 (컬렉션/포인트/벡터 샘플)
 
 Query Parameters:
 - `format` (optional): `json | f32 | f16` (기본값은 서버 설정 `response_format`)
+- `profile` (optional): `verification | reid` (기본값 `verification`)
 
 Form Fields:
 - `file` (required, file): 입력 이미지
@@ -169,6 +170,7 @@ JSON 응답 예시:
 
 Query Parameters:
 - `format` (optional): `json | f32 | f16`
+- `profile` (optional): `verification | reid` (기본값 `verification`)
 
 Form Fields:
 - `files` (required, file[], repeated): 입력 이미지 목록
@@ -285,6 +287,9 @@ SEED 정책:
 }
 ```
 
+비고:
+- `filters.captured_from` / `filters.captured_to`에 타임존이 없으면, 서버는 비즈니스 타임존(`settings.business_tz`, 기본 `Asia/Seoul`)으로 해석합니다.
+
 응답 예시:
 ```json
 {
@@ -369,7 +374,7 @@ SEED 정책:
 
 Query Parameters:
 - `daycare_id` (required, string)
-- `date` (optional, string): `YYYY-MM-DD` (UTC)
+- `date` (optional, string): `YYYY-MM-DD` (비즈니스 타임존 기준, 기본 `Asia/Seoul`)
 - `tab` (optional): `ALL | UNCLASSIFIED | PET` (default `ALL`)
 - `pet_id` (optional): `tab=PET`일 때 사용
 - `include_seed` (optional, bool, default `false`)
@@ -724,6 +729,9 @@ Form Fields:
 - `400`: `timestamp` 형식 오류 (현재 서버는 ISO8601 문자열 기대)
 - `413`: 업로드 크기 초과
 
+비고:
+- `timestamp`에 타임존 정보가 없으면 서버는 비즈니스 타임존(`settings.business_tz`, 기본 `Asia/Seoul`) 기준으로 해석합니다.
+
 저장 구조 (현재 코드 기준):
 - `data/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.json`
 - `data/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.{jpg|png|webp}`
@@ -746,7 +754,7 @@ Form Fields:
 
 요청 주요 필드:
 - `daycare_id` (string)
-- `date` (date)
+- `date` (date, 비즈니스 타임존 기준; `settings.business_tz`, 기본 `Asia/Seoul`)
 - `species` (optional: `DOG | CAT`)
 - `auto_accept_threshold` (float, default 0.78)
 - `candidate_threshold` (float, default 0.62)
@@ -813,7 +821,7 @@ Form Fields:
 
 요청 주요 필드:
 - `daycare_id` (string)
-- `date` (date)
+- `date` (date, 비즈니스 타임존 기준; `settings.business_tz`, 기본 `Asia/Seoul`)
 - `tab` (`ALL | UNCLASSIFIED | PET`)
 - `pet_id` (optional, `tab=PET`일 때 주로 사용)
 - `query_instance_ids` (string[], min 1)

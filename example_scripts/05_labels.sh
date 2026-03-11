@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 API_BASE="${API_BASE:-http://localhost:8001}"
 DAYCARE_ID="${DAYCARE_ID:-dc_001}"
 INSTANCE_ID="${INSTANCE_ID:-ins_...}"
 PET_ID="${PET_ID:-pet_aaa}"
 SOURCE="${SOURCE:-MANUAL}"
 CONFIDENCE="${CONFIDENCE:-1.0}"
-STATE_FILE="${STATE_FILE:-/workspace/PoC/dogface_fastapi_poc_qdrant/example_scripts/last_ingest.json}"
+STATE_FILE="${STATE_FILE:-${SCRIPT_DIR}/last_ingest.json}"
 
 if [ "${INSTANCE_ID}" = "ins_..." ] && [ -f "${STATE_FILE}" ]; then
   INSTANCE_ID="$(python3 - <<'PY' "${STATE_FILE}"

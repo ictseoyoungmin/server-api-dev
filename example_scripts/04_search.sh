@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 API_BASE="${API_BASE:-http://localhost:8001}"
 DAYCARE_ID="${DAYCARE_ID:-dc_001}"
 QUERY_INSTANCE_IDS_JSON="${QUERY_INSTANCE_IDS_JSON:-[\"ins_...\"]}"
@@ -8,7 +10,7 @@ MERGE="${MERGE:-RRF}"
 SPECIES="${SPECIES:-DOG}"
 TOP_K_IMAGES="${TOP_K_IMAGES:-200}"
 PER_QUERY_LIMIT="${PER_QUERY_LIMIT:-400}"
-STATE_FILE="${STATE_FILE:-/workspace/PoC/dogface_fastapi_poc_qdrant/example_scripts/last_ingest.json}"
+STATE_FILE="${STATE_FILE:-${SCRIPT_DIR}/last_ingest.json}"
 
 if [ "${QUERY_INSTANCE_IDS_JSON}" = "[\"ins_...\"]" ] && [ -f "${STATE_FILE}" ]; then
   QUERY_INSTANCE_IDS_JSON="$(python3 - <<'PY' "${STATE_FILE}"

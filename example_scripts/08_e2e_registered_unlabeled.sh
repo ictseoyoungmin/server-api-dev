@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 API_BASE="${API_BASE:-http://localhost:8001}"
 DAYCARE_ID="${DAYCARE_ID:-dc_001}"
 DAY="${DAY:-2026-02-13}"
@@ -11,10 +14,9 @@ AUTO_ACCEPT_THRESHOLD="${AUTO_ACCEPT_THRESHOLD:-0.78}"
 CANDIDATE_THRESHOLD="${CANDIDATE_THRESHOLD:-0.62}"
 SEARCH_LIMIT="${SEARCH_LIMIT:-200}"
 
-BASE_TEST_DIR="${BASE_TEST_DIR:-/workspace/PoC/dogface_fastapi_poc_qdrant/data/images_for_test/${DAYCARE_ID}}"
+BASE_TEST_DIR="${BASE_TEST_DIR:-${PROJECT_ROOT}/data/images_for_test/${DAYCARE_ID}}"
 REGISTERED_DIR="${REGISTERED_DIR:-${BASE_TEST_DIR}/registered}"
 UNLABELED_DIR="${UNLABELED_DIR:-${BASE_TEST_DIR}/${DAY}/unlabeled}"
-STORAGE_DIR="${STORAGE_DIR:-/workspace/PoC/dogface_fastapi_poc_qdrant/data}"
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -178,9 +180,6 @@ while IFS= read -r -d '' d; do
   split_pet_folder "$folder_name"
   pet_id="$PET_ID_PARSED"
   pet_name="$PET_NAME_PARSED"
-
-  # Ensure readable pet-name path exists for /v1/pets mapping
-  mkdir -p "${STORAGE_DIR}/pets/${pet_id}/${pet_name}"
 
   first_img="$(find "$d" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) | sort | head -n 1 || true)"
   if [ -z "$first_img" ]; then

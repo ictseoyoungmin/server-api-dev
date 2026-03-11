@@ -16,8 +16,26 @@ from app.vector_db.qdrant_store import QdrantStore
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging(settings.log_level)
-    embedder = Embedder(settings)
-    app.state.embedder = embedder
+    verification_embedder = Embedder(
+        settings,
+        profile_name="verification",
+        model_name=settings.verification_model_name,
+        miewid_model_source=settings.verification_miewid_model_source,
+        miewid_finetune_ckpt_path=settings.verification_miewid_finetune_ckpt_path,
+    )
+    reid_embedder = Embedder(
+        settings,
+        profile_name="reid",
+        model_name=settings.reid_model_name,
+        miewid_model_source=settings.reid_miewid_model_source,
+        miewid_finetune_ckpt_path=settings.reid_miewid_finetune_ckpt_path,
+    )
+    app.state.embedders = {
+        "verification": verification_embedder,
+        "reid": reid_embedder,
+    }
+    # Backward compatibility for endpoints that still expect a single embedder.
+    app.state.embedder = verification_embedder
 
     # Vector DB
     store = QdrantStore(
@@ -27,9 +45,9 @@ async def lifespan(app: FastAPI):
         timeout_s=settings.qdrant_timeout_s,
     )
     # Ensure collection exists with correct vector size.
-    if embedder.dim is None:
+    if reid_embedder.dim is None:
         raise RuntimeError("Failed to resolve embedding dimension")
-    store.ensure_collection(embedder.dim)
+    store.ensure_collection(reid_embedder.dim)
     app.state.vector_store = store
 
     # Detector (optional)

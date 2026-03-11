@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
@@ -50,6 +51,11 @@ def _safe_folder_name(name: Optional[str]) -> str:
 
 
 def _get_embedder(request: Request):
+    embedders = getattr(request.app.state, "embedders", None)
+    if isinstance(embedders, dict):
+        embedder = embedders.get("reid")
+        if embedder is not None:
+            return embedder
     embedder = getattr(request.app.state, "embedder", None)
     if embedder is None:
         raise HTTPException(status_code=503, detail="Embedding model not ready")
@@ -94,7 +100,11 @@ async def ingest(
     cap_dt: Optional[datetime] = None
     if captured_at:
         try:
-            cap_dt = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                # If client omits timezone, treat it as business timezone (default KST).
+                parsed = parsed.replace(tzinfo=ZoneInfo(settings.business_tz))
+            cap_dt = parsed
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid captured_at: {captured_at}") from e
 
@@ -102,7 +112,7 @@ async def ingest(
     image_id = f"img_{uuid.uuid4().hex}"
 
     # Persist raw image (PoC local storage)
-    base_dir = Path(settings.storage_dir)
+    base_dir = Path(settings.reid_storage_dir)
     role_dir = image_role.lower()
     if image_role == "SEED":
         pet_dir = _safe_folder_name(pet_name)

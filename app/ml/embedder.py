@@ -32,17 +32,31 @@ class Embedder:
     Concurrency is limited via an asyncio.Semaphore to protect GPU memory.
     """
 
-    def __init__(self, settings: Settings):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        profile_name: str = "default",
+        model_name: Optional[str] = None,
+        input_size: Optional[int] = None,
+        miewid_model_source: Optional[str] = None,
+        miewid_finetune_ckpt_path: Optional[Path] = None,
+    ):
         self.settings = settings
+        self.profile_name = profile_name
+        self.model_name = (model_name or settings.model_name).strip()
+        self.input_size_override = input_size if input_size is not None else settings.input_size
+        self.miewid_model_source = miewid_model_source or settings.miewid_model_source
+        self.miewid_finetune_ckpt_path = miewid_finetune_ckpt_path
 
         # Resolve device
         self.device = self._resolve_device(settings.device)
-        self.spec: ModelSpec = get_model_spec(settings.model_name, settings.input_size)
+        self.spec: ModelSpec = get_model_spec(self.model_name, self.input_size_override)
 
         self.model = load_embedding_model(
-            settings.model_name,
+            self.model_name,
             settings.hf_cache_dir,
-            miewid_model_source=settings.miewid_model_source,
+            miewid_model_source=self.miewid_model_source,
         )
         self.model.eval()
         self.model.to(self.device)
@@ -60,18 +74,19 @@ class Embedder:
         self._warmup_and_resolve_dim()
 
         self.model_info = ModelInfo(
-            model_name=settings.model_name,
+            model_name=self.model_name,
             model_version=(
-                f"{settings.model_name}+{self._finetune_ckpt_name}"
+                f"{self.model_name}+{self._finetune_ckpt_name}"
                 if self._finetuned and self._finetune_ckpt_name
-                else settings.model_name
+                else self.model_name
             ),
             input_size=self.spec.input_size,
         )
 
         logger.info(
-            "Embedder ready | model=%s | device=%s | input=%s",
-            settings.model_name,
+            "Embedder ready | profile=%s | model=%s | device=%s | input=%s",
+            self.profile_name,
+            self.model_name,
             self.device,
             self.spec.input_size,
         )
@@ -134,8 +149,8 @@ class Embedder:
         return {k[len(prefix) :]: v for k, v in state.items() if k.startswith(prefix)}
 
     def _try_load_miewid_finetune_ckpt(self) -> None:
-        ckpt_path = self.settings.miewid_finetune_ckpt_path
-        if self.settings.model_name.lower().strip() != "miewid" or ckpt_path is None:
+        ckpt_path = self.miewid_finetune_ckpt_path
+        if self.model_name.lower().strip() != "miewid" or ckpt_path is None:
             return
         ckpt_path = Path(ckpt_path)
         if not ckpt_path.exists():

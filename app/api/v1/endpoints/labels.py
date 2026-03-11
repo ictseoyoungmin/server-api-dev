@@ -49,7 +49,7 @@ def _build_label_payload(a, labeled_by: Optional[str], now_ts: int) -> tuple[dic
 
 def _sync_meta_sidecars(assignments: Dict[str, dict]) -> None:
     """Mirror assignment fields into local image meta JSON sidecars."""
-    meta_dir = Path(settings.storage_dir) / "meta"
+    meta_dir = Path(settings.reid_storage_dir) / "meta"
     if not meta_dir.exists():
         return
 

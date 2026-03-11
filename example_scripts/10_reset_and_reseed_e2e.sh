@@ -2,15 +2,18 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 API_BASE="${API_BASE:-http://localhost:8001}"
 QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
 QDRANT_COLLECTION="${QDRANT_COLLECTION:-pet_instances_v1}"
 
-DATA_TEST_ROOT="${DATA_TEST_ROOT:-/workspace/PoC/dogface_fastapi_poc_qdrant/data/images_for_test}"
+DATA_TEST_ROOT="${DATA_TEST_ROOT:-${PROJECT_ROOT}/data/images_for_test}"
 DAYCARE_ID="${DAYCARE_ID:-}"
 DAY="${DAY:-}"
-STORAGE_DIR="${STORAGE_DIR:-/workspace/PoC/dogface_fastapi_poc_qdrant/data}"
+STORAGE_DIR="${STORAGE_DIR:-${PROJECT_ROOT}/data}"
+REID_DIR="${REID_DIR:-${STORAGE_DIR}/reid}"
+VERIFICATION_DIR="${VERIFICATION_DIR:-${STORAGE_DIR}/verification}"
 
 # 0: delete points only (no API restart needed), 1: delete collection (may require API restart)
 HARD_COLLECTION_RESET="${HARD_COLLECTION_RESET:-0}"
@@ -64,8 +67,9 @@ fi
 if [[ "$FORCE" != "1" ]]; then
   echo "[WARN] This will reset test state:"
   echo "  - Qdrant collection/points: ${QDRANT_COLLECTION}"
-  echo "  - Local storage dirs under: ${STORAGE_DIR}"
-  echo "      images, thumbs, meta, pets, buckets, trials"
+  echo "  - Local storage dirs:"
+  echo "      ${REID_DIR}/{images,thumbs,meta,buckets}"
+  echo "      ${VERIFICATION_DIR}/{pets,trials}"
   read -r -p "Proceed? (y/N): " ans
   if [[ "$ans" != "y" && "$ans" != "Y" ]]; then
     echo "Aborted."
@@ -81,6 +85,8 @@ echo "DATA_TEST_ROOT=${DATA_TEST_ROOT}"
 echo "DAYCARE_ID=${DAYCARE_ID}"
 echo "DAY=${DAY}"
 echo "STORAGE_DIR=${STORAGE_DIR}"
+echo "REID_DIR=${REID_DIR}"
+echo "VERIFICATION_DIR=${VERIFICATION_DIR}"
 echo "HARD_COLLECTION_RESET=${HARD_COLLECTION_RESET}"
 echo "QDRANT_VECTOR_DIM=${QDRANT_VECTOR_DIM:-auto}"
 
@@ -146,24 +152,24 @@ fi
 echo
 echo "[3/5] reset local storage"
 rm -rf \
-  "${STORAGE_DIR}/images" \
-  "${STORAGE_DIR}/thumbs" \
-  "${STORAGE_DIR}/meta" \
-  "${STORAGE_DIR}/pets" \
-  "${STORAGE_DIR}/buckets" \
-  "${STORAGE_DIR}/trials"
+  "${REID_DIR}/images" \
+  "${REID_DIR}/thumbs" \
+  "${REID_DIR}/meta" \
+  "${REID_DIR}/buckets" \
+  "${VERIFICATION_DIR}/pets" \
+  "${VERIFICATION_DIR}/trials"
 mkdir -p \
-  "${STORAGE_DIR}/images" \
-  "${STORAGE_DIR}/thumbs" \
-  "${STORAGE_DIR}/meta" \
-  "${STORAGE_DIR}/pets" \
-  "${STORAGE_DIR}/buckets" \
-  "${STORAGE_DIR}/trials"
+  "${REID_DIR}/images" \
+  "${REID_DIR}/thumbs" \
+  "${REID_DIR}/meta" \
+  "${REID_DIR}/buckets" \
+  "${VERIFICATION_DIR}/pets" \
+  "${VERIFICATION_DIR}/trials"
 echo "  - local storage reset complete"
 
 echo
 echo "[4/5] run e2e reseed (08)"
-API_BASE="$API_BASE" DAYCARE_ID="$DAYCARE_ID" DAY="$DAY" STORAGE_DIR="$STORAGE_DIR" \
+API_BASE="$API_BASE" DAYCARE_ID="$DAYCARE_ID" DAY="$DAY" \
   bash "${SCRIPT_DIR}/08_e2e_registered_unlabeled.sh"
 
 if [[ "$VERIFY_AFTER" == "1" ]]; then

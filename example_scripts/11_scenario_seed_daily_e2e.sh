@@ -4,14 +4,16 @@ set -euo pipefail
 BASE_URL="${BASE_URL:-http://localhost:8001/v1}"
 DAYCARE_ID="${DAYCARE_ID:-dc_001}"
 TODAY_UTC="${TODAY_UTC:-$(date -u +%F)}"
-SEED_ROOT="${SEED_ROOT:-/workspace/PoC/dogface_fastapi_poc_qdrant/data/images_for_test/dc_001/registered}"
-DAILY_ROOT="${DAILY_ROOT:-/workspace/PoC/dogface_fastapi_poc_qdrant/data/images_for_test/dc_001/iphoneX/pictures/daily}"
 UPDATED_BY="${UPDATED_BY:-scenario_runner}"
 RESET_FIRST="${RESET_FIRST:-true}"
+QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
+QDRANT_COLLECTION="${QDRANT_COLLECTION:-pet_instances_v1}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CLEAR_QDRANT_SCRIPT="${CLEAR_QDRANT_SCRIPT:-${SCRIPT_DIR}/06_clear_qdrant.sh}"
+SEED_ROOT="${SEED_ROOT:-${PROJECT_ROOT}/data/images_for_test/dc_001/registered}"
+DAILY_ROOT="${DAILY_ROOT:-${PROJECT_ROOT}/data/images_for_test/dc_001/iphoneX/pictures/daily}"
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || { echo "missing command: $1"; exit 1; }
@@ -20,6 +22,34 @@ require_cmd() {
 require_cmd curl
 require_cmd python3
 
+recreate_collection_if_needed() {
+  local dim
+  dim="$(curl -sS -m 3 "${BASE_URL}/health" | python3 -c 'import json,sys
+raw=sys.stdin.read().strip()
+try:
+    d=json.loads(raw)
+    print(int((d.get("model") or {}).get("dim") or 0))
+except Exception:
+    print(0)')"
+  if [[ -z "${dim}" || "${dim}" == "0" ]]; then
+    echo "[FAIL] could not resolve embedding dim from ${BASE_URL}/health"
+    exit 1
+  fi
+  local body="{\"vectors\":{\"size\":${dim},\"distance\":\"Cosine\"}}"
+  local code
+  code="$(curl -sS -o /tmp/scenario11_recreate.out -w "%{http_code}" \
+    -X PUT "${QDRANT_URL}/collections/${QDRANT_COLLECTION}" \
+    -H "Content-Type: application/json" \
+    -d "${body}" || true)"
+  if [[ "${code}" == "200" || "${code}" == "201" || "${code}" == "202" ]]; then
+    echo "[OK] Qdrant collection ready: ${QDRANT_COLLECTION} (dim=${dim})"
+    return 0
+  fi
+  echo "[FAIL] recreate collection returned HTTP ${code}"
+  cat /tmp/scenario11_recreate.out || true
+  exit 1
+}
+
 if [[ "${RESET_FIRST}" == "true" ]]; then
   echo "[0/6] Reset storage outputs + Qdrant collection"
   if [[ ! -x "${CLEAR_QDRANT_SCRIPT}" ]]; then
@@ -27,17 +57,22 @@ if [[ "${RESET_FIRST}" == "true" ]]; then
     exit 1
   fi
   "${CLEAR_QDRANT_SCRIPT}" --hard
+  recreate_collection_if_needed
 
   rm -rf \
-    "${PROJECT_ROOT}/data/meta" \
-    "${PROJECT_ROOT}/data/images" \
-    "${PROJECT_ROOT}/data/thumbs" \
-    "${PROJECT_ROOT}/data/buckets"
+    "${PROJECT_ROOT}/data/reid/meta" \
+    "${PROJECT_ROOT}/data/reid/images" \
+    "${PROJECT_ROOT}/data/reid/thumbs" \
+    "${PROJECT_ROOT}/data/reid/buckets" \
+    "${PROJECT_ROOT}/data/verification/pets" \
+    "${PROJECT_ROOT}/data/verification/trials"
   mkdir -p \
-    "${PROJECT_ROOT}/data/meta" \
-    "${PROJECT_ROOT}/data/images" \
-    "${PROJECT_ROOT}/data/thumbs" \
-    "${PROJECT_ROOT}/data/buckets"
+    "${PROJECT_ROOT}/data/reid/meta" \
+    "${PROJECT_ROOT}/data/reid/images" \
+    "${PROJECT_ROOT}/data/reid/thumbs" \
+    "${PROJECT_ROOT}/data/reid/buckets" \
+    "${PROJECT_ROOT}/data/verification/pets" \
+    "${PROJECT_ROOT}/data/verification/trials"
 fi
 
 json_post() {
@@ -156,7 +191,7 @@ echo "daily ingested: $ingested"
 
 
 echo "[3/6] Auto classify"
-auto_body="{\"daycare_id\":\"$DAYCARE_ID\",\"date\":\"$TODAY_UTC\",\"auto_accept_threshold\":0.5,\"candidate_threshold\":0.4,\"search_limit\":200,\"dry_run\":false,\"labeled_by\":\"scenario_runner\"}"
+auto_body="{\"daycare_id\":\"$DAYCARE_ID\",\"date\":\"$TODAY_UTC\",\"auto_accept_threshold\":0.5,\"candidate_threshold\":0.4,\"search_limit\":200,\"dry_run\":false,\"labeled_by\":\"$UPDATED_BY\"}"
 auto_resp="$(json_post "$BASE_URL/classify/auto" "$auto_body")"
 echo "$auto_resp" | python3 -m json.tool >/tmp/auto_classify.json
 python3 - <<'PY'

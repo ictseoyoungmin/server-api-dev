@@ -8,6 +8,7 @@ from datetime import date as date_type
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
@@ -29,7 +30,7 @@ def _get_store(request: Request) -> QdrantStore:
 
 
 def _meta_path(image_id: str) -> Path:
-    return Path(settings.storage_dir) / "meta" / f"{image_id}.json"
+    return Path(settings.reid_storage_dir) / "meta" / f"{image_id}.json"
 
 
 def _read_meta(image_id: str) -> dict:
@@ -116,9 +117,12 @@ def _is_seed_image(meta: dict) -> bool:
 
 
 def _day_range_ts(day: date_type) -> tuple[int, int]:
-    start = datetime.combine(day, time.min, tzinfo=timezone.utc)
-    end = start + timedelta(days=1)
-    return int(start.timestamp()), int(end.timestamp())
+    tz = ZoneInfo(settings.business_tz)
+    start_local = datetime.combine(day, time.min, tzinfo=tz)
+    end_local = start_local + timedelta(days=1)
+    start_utc = start_local.astimezone(timezone.utc)
+    end_utc = end_local.astimezone(timezone.utc)
+    return int(start_utc.timestamp()), int(end_utc.timestamp())
 
 
 def _build_item_from_db(image_id: str, agg: dict, meta: Optional[dict]) -> GalleryImageItem:
@@ -161,7 +165,7 @@ def _build_item_from_db(image_id: str, agg: dict, meta: Optional[dict]) -> Galle
 async def list_images(
     request: Request,
     daycare_id: str = Query(...),
-    date: Optional[str] = Query(default=None, description="UTC date filter (YYYY-MM-DD)"),
+    date: Optional[str] = Query(default=None, description="Business timezone date filter (YYYY-MM-DD)"),
     tab: Literal["ALL", "UNCLASSIFIED", "PET"] = Query(default="ALL"),
     pet_id: Optional[str] = Query(default=None),
     include_seed: bool = Query(default=False, description="Include seed(exemplar) images in results."),

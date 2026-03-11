@@ -32,7 +32,7 @@ def _safe_folder_name(name: Optional[str]) -> str:
 
 def _facebank_root(pet_id: str, pet_name: Optional[str], facebank_id: str) -> Path:
     return (
-        Path(settings.storage_dir)
+        Path(settings.verification_storage_dir)
         / "pets"
         / pet_id
         / _safe_folder_name(pet_name)
@@ -42,6 +42,7 @@ def _facebank_root(pet_id: str, pet_name: Optional[str], facebank_id: str) -> Pa
 
 
 def _legacy_facebank_root(pet_id: str, facebank_id: str) -> Path:
+    # Backward-compat read path for legacy layout.
     return Path(settings.storage_dir) / "pets" / pet_id / facebank_id
 
 
@@ -113,7 +114,7 @@ def sync_images_query(
     roots.append(_legacy_facebank_root(pet_id, facebank_id))
 
     if pet_name is None:
-        pet_root = Path(settings.storage_dir) / "pets" / pet_id
+        pet_root = Path(settings.verification_storage_dir) / "pets" / pet_id
         if pet_root.exists():
             for child in pet_root.iterdir():
                 fb = child / "facebanks" / facebank_id

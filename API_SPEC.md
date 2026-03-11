@@ -93,6 +93,9 @@ Response:
 ```
 
 Notes:
+- For `filters.captured_from` / `filters.captured_to`, if timezone is omitted, server interprets them in business timezone (`settings.business_tz`, default `Asia/Seoul`).
+
+Notes:
 - `results[].score` is the ranking score. With `merge=MAX`, it equals the best cosine similarity.
 - `results[].best_match.score` is always the best cosine similarity.
 
@@ -131,7 +134,7 @@ Note:
 
 Query:
 - `daycare_id` (required)
-- `date` (optional): `YYYY-MM-DD` (UTC date filter)
+- `date` (optional): `YYYY-MM-DD` (business timezone date filter; default `Asia/Seoul`)
 - `tab` (optional): `ALL | UNCLASSIFIED | PET` (default `ALL`)
 - `pet_id` (required when `tab=PET`)
 - `include_seed` (optional, default `false`): seed(exemplar) 이미지 포함 여부
@@ -265,6 +268,7 @@ Purpose:
 ```
 
 Behavior:
+- `date` is interpreted in business timezone (`settings.business_tz`, default `Asia/Seoul`).
 - Target: instances on the given date that are not `assignment_status=ACCEPTED` and have no `pet_id`.
 - Exemplar pool: instances explicitly registered as exemplar (`is_seed=true`, `seed_pet_id` set, `seed_active=true`) in the same daycare.
 - Decision:
@@ -292,6 +296,7 @@ Behavior:
 ```
 
 Behavior:
+- `date` is interpreted in business timezone (`settings.business_tz`, default `Asia/Seoul`).
 - Uses the selected query instances as exemplars.
 - Candidate set is restricted to images currently visible in tab scope:
   - `ALL`
@@ -315,6 +320,7 @@ Behavior:
 ```
 
 Behavior:
+- `date` is interpreted in business timezone (`settings.business_tz`, default `Asia/Seoul`).
 - Scans accepted assignments (`assignment_status=ACCEPTED`) on that day.
 - Builds `pet_id -> image_ids[]` mapping.
 - Persists manifest JSON under:
@@ -339,6 +345,7 @@ Fields:
 
 Query:
 - `format` (optional): `json|f32|f16` (default from server settings)
+- `profile` (optional): `verification|reid` (default: `verification`)
 
 Response (JSON format):
 ```json
@@ -364,6 +371,7 @@ Fields:
 
 Query:
 - `format` (optional): `json|f32|f16` (default from server settings)
+- `profile` (optional): `verification|reid` (default: `verification`)
 
 Response (JSON format):
 ```json
@@ -465,6 +473,9 @@ Response:
   "outcome": "TP"
 }
 ```
+
+Notes:
+- If `timestamp` has no timezone offset, server interprets it in business timezone (`settings.business_tz`, default `Asia/Seoul`).
 
 Storage (PoC):
 - `storage_dir/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.json`

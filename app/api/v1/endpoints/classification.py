@@ -6,6 +6,7 @@ import json
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Set, Tuple
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from starlette.concurrency import run_in_threadpool
@@ -38,9 +39,12 @@ def _get_store(request: Request) -> QdrantStore:
 
 
 def _day_range_ts(day: date) -> Tuple[int, int]:
-    start = datetime.combine(day, time.min, tzinfo=timezone.utc)
-    end = start + timedelta(days=1)
-    return int(start.timestamp()), int(end.timestamp())
+    tz = ZoneInfo(settings.business_tz)
+    start_local = datetime.combine(day, time.min, tzinfo=tz)
+    end_local = start_local + timedelta(days=1)
+    start_utc = start_local.astimezone(timezone.utc)
+    end_utc = end_local.astimezone(timezone.utc)
+    return int(start_utc.timestamp()), int(end_utc.timestamp())
 
 
 def _payload_instance_id(store: QdrantStore, p: PointRecord) -> str:
@@ -71,11 +75,12 @@ def _is_exemplar(payload: dict) -> bool:
     return bool(payload.get("seed_active", True))
 
 
-def _meta_day_utc(meta: dict) -> str:
+def _meta_day_business(meta: dict) -> str:
     img = meta.get("image") or {}
     ts = img.get("captured_at_ts") or img.get("uploaded_at_ts")
     try:
-        return datetime.fromtimestamp(int(ts), tz=timezone.utc).date().isoformat()
+        tz = ZoneInfo(settings.business_tz)
+        return datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(tz).date().isoformat()
     except Exception:
         return ""
 
@@ -112,7 +117,7 @@ def _load_day_metas(
     pet_id: Optional[str] = None,
     include_seed: bool = False,
 ) -> List[dict]:
-    meta_dir = Path(settings.storage_dir) / "meta"
+    meta_dir = Path(settings.reid_storage_dir) / "meta"
     if not meta_dir.exists():
         return []
     day_str = day.isoformat()
@@ -123,7 +128,7 @@ def _load_day_metas(
             img = meta.get("image") or {}
             if str(img.get("daycare_id")) != daycare_id:
                 continue
-            if _meta_day_utc(meta) != day_str:
+            if _meta_day_business(meta) != day_str:
                 continue
             if (not include_seed) and _is_seed_image(meta):
                 continue
@@ -144,7 +149,7 @@ def _rrf_fusion_image(result_lists: List[List[str]], k: int = 60) -> Dict[str, f
 
 
 def _sync_meta_sidecars(assignments: Dict[str, dict]) -> None:
-    meta_dir = Path(settings.storage_dir) / "meta"
+    meta_dir = Path(settings.reid_storage_dir) / "meta"
     if not meta_dir.exists():
         return
     for p in meta_dir.glob("img_*.json"):
@@ -440,7 +445,7 @@ async def classify_similar(request: Request, body: SimilarSearchRequest):
 
 
 def _manifest_dir(daycare_id: str, day: date) -> Path:
-    return Path(settings.storage_dir) / "buckets" / daycare_id / day.isoformat()
+    return Path(settings.reid_storage_dir) / "buckets" / daycare_id / day.isoformat()
 
 
 @router.post("/buckets/finalize", response_model=FinalizeBucketsResponse)

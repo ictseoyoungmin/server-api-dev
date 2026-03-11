@@ -47,7 +47,7 @@ def _prune_empty_dirs(root: Path) -> None:
 
 
 def _delete_daycare_from_storage(daycare_id: str) -> dict:
-    base_dir = Path(settings.storage_dir)
+    base_dir = Path(settings.reid_storage_dir)
     meta_dir = base_dir / "meta"
     buckets_dir = base_dir / "buckets" / daycare_id
     deleted_meta = 0
