@@ -41,13 +41,32 @@ class Embedder:
         input_size: Optional[int] = None,
         miewid_model_source: Optional[str] = None,
         miewid_finetune_ckpt_path: Optional[Path] = None,
+        weight_mode: str = "auto",
     ):
         self.settings = settings
         self.profile_name = profile_name
         self.model_name = (model_name or settings.model_name).strip()
         self.input_size_override = input_size if input_size is not None else settings.input_size
-        self.miewid_model_source = miewid_model_source or settings.miewid_model_source
+        self.miewid_model_source = (miewid_model_source or "conservationxlabs/miewid-msv3").strip()
         self.miewid_finetune_ckpt_path = miewid_finetune_ckpt_path
+        self.weight_mode = (weight_mode or "auto").strip().lower()
+
+        miewid_load_pretrained = True
+        miewid_local_files_only = False
+        miewid_require_local_source = False
+        if self.model_name.lower() == "miewid":
+            if self.weight_mode == "hf":
+                self.miewid_finetune_ckpt_path = None
+                miewid_load_pretrained = True
+                # In hf-mode, force local HF source and fail fast if unavailable.
+                miewid_local_files_only = True
+                miewid_require_local_source = True
+            elif self.weight_mode == "ft":
+                if self.miewid_finetune_ckpt_path is None:
+                    raise ValueError("weight_mode=ft requires miewid_finetune_ckpt_path")
+                # FT-only mode: initialize from config and load finetune ckpt weights.
+                miewid_load_pretrained = False
+                miewid_local_files_only = True
 
         # Resolve device
         self.device = self._resolve_device(settings.device)
@@ -57,6 +76,9 @@ class Embedder:
             self.model_name,
             settings.hf_cache_dir,
             miewid_model_source=self.miewid_model_source,
+            miewid_load_pretrained=miewid_load_pretrained,
+            miewid_local_files_only=miewid_local_files_only,
+            miewid_require_local_source=miewid_require_local_source,
         )
         self.model.eval()
         self.model.to(self.device)
@@ -84,9 +106,10 @@ class Embedder:
         )
 
         logger.info(
-            "Embedder ready | profile=%s | model=%s | device=%s | input=%s",
+            "Embedder ready | profile=%s | model=%s | weight_mode=%s | device=%s | input=%s",
             self.profile_name,
             self.model_name,
+            self.weight_mode,
             self.device,
             self.spec.input_size,
         )
@@ -130,15 +153,21 @@ class Embedder:
 
         # transformers ModelOutput
         if hasattr(out, "last_hidden_state"):
-            return out.last_hidden_state
-        if isinstance(out, dict) and "last_hidden_state" in out:
-            return out["last_hidden_state"]
+            out = out.last_hidden_state
+        elif isinstance(out, dict) and "last_hidden_state" in out:
+            out = out["last_hidden_state"]
+        elif isinstance(out, (list, tuple)):
+            # some models return tuple/list
+            out = out[0]
 
-        # some models return tuple/list
-        if isinstance(out, (list, tuple)):
-            return out[0]
-
-        if self._finetuned and self.proj_embed is not None and self.proj_bn is not None:
+        # Match FT training-time embedding path:
+        # backbone -> flatten -> embed(linear) -> bn
+        if (
+            self.weight_mode == "ft"
+            and self._finetuned
+            and self.proj_embed is not None
+            and self.proj_bn is not None
+        ):
             if out.ndim > 2:
                 out = torch.flatten(out, 1)
             out = self.proj_bn(self.proj_embed(out))

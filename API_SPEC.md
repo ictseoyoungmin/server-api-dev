@@ -7,6 +7,18 @@ Base URL (default):
 - Scripted run: `http://<host>:8001` (see `run_api.sh`)
 - Docker Compose: `http://<host>:8000` (see `docker-compose.yml`)
 
+## 0) Root
+`GET /`
+
+Response:
+```json
+{
+  "name": "dogface-embedding-api",
+  "docs": "/docs",
+  "health": "/v1/health"
+}
+```
+
 ## 1) Health
 `GET /v1/health`
 
@@ -166,8 +178,7 @@ Response:
 
 Notes:
 - Primary source is Qdrant payload points filtered by `daycare_id` (`pet_id` and `seed_pet_id` aggregation).
-- `pet_name` is resolved from `storage_dir/pets/{pet_id}/{pet_name}` when available.
-- For PoC fallback, pets existing under `storage_dir/pets` are included even if counts are zero.
+- `pet_name` is resolved from `shared_storage_dir/registry/pets/{daycare_id}.json` when available.
 
 ## 5.0.1) Daycares (admin list/reset)
 `GET /v1/daycares`
@@ -250,6 +261,38 @@ Purpose:
 
 Purpose:
 - Remove exemplar status from an instance (does not delete the instance itself).
+
+## 5.1.1) Admin image-level labeling
+`POST /v1/admin/images/labels`
+
+**Content-Type**: `application/json`
+
+Request:
+```json
+{
+  "daycare_id": "dc_001",
+  "date": "2026-03-15",
+  "image_ids": ["img_a", "img_b"],
+  "action": "ACCEPT",
+  "pet_id": "pet_pomi",
+  "labeled_by": "admin_dashboard",
+  "confidence": 1.0,
+  "source": "MANUAL",
+  "select_mode": "BEST_CONFIDENCE"
+}
+```
+
+Behavior:
+- The dashboard can operate on `image_id` cards instead of raw `instance_id`.
+- `ACCEPT`, `CLEAR`, `REJECT` are supported.
+- `select_mode=BEST_CONFIDENCE` picks one representative daily instance per image.
+- `select_mode=ALL` applies to all daily instances in the image.
+- Seed images are excluded from the target pool.
+- Label updates are mirrored to local meta sidecars.
+
+Response:
+- `daycare_id`, `action`, `pet_id`, `labeled_at`
+- `items[]`: `image_id`, `selected_instance_ids[]`, `updated_count`, `skipped_reason`
 
 ## 5.2) Auto Classification (date scope)
 `POST /v1/classify/auto`
@@ -397,8 +440,8 @@ Query:
 - `petId` (required)
 - `petName` (optional): name used for server-side folder grouping
 - `facebankId` (required)
-- `facebankVersion` (optional, default latest)
 - `hashes` (required): CSV list of sha256 hashes
+- `facebankVersion` (optional, default latest)
 
 Response:
 ```json
@@ -440,9 +483,9 @@ Response:
 ```
 
 Storage (PoC):
-- `storage_dir/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/images/*`
-- `storage_dir/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/hash_index.json`
-- `storage_dir/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/facebank_meta.json`
+- `verification_storage_dir/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/images/*`
+- `verification_storage_dir/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/hash_index.json`
+- `verification_storage_dir/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/facebank_meta.json`
 
 ## 9) Verification Trials (TP/FP/FN/TN logging)
 `POST /v1/trials`
@@ -476,7 +519,9 @@ Response:
 
 Notes:
 - If `timestamp` has no timezone offset, server interprets it in business timezone (`settings.business_tz`, default `Asia/Seoul`).
+- If the same `id` already exists, response status becomes `duplicate` and `stored=false`.
+- When `petName` is omitted, the server stores under fallback path `verification_storage_dir/trials/{YYYY-MM-DD}`.
 
 Storage (PoC):
-- `storage_dir/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.json`
-- `storage_dir/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.jpg`
+- `verification_storage_dir/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.json`
+- `verification_storage_dir/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.jpg`

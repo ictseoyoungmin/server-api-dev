@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -12,6 +13,8 @@ from app.core.logging import setup_logging
 from app.ml.embedder import Embedder
 from app.vector_db.qdrant_store import QdrantStore
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -22,6 +25,7 @@ async def lifespan(app: FastAPI):
         model_name=settings.verification_model_name,
         miewid_model_source=settings.verification_miewid_model_source,
         miewid_finetune_ckpt_path=settings.verification_miewid_finetune_ckpt_path,
+        weight_mode=settings.verification_weight_mode,
     )
     reid_embedder = Embedder(
         settings,
@@ -29,6 +33,7 @@ async def lifespan(app: FastAPI):
         model_name=settings.reid_model_name,
         miewid_model_source=settings.reid_miewid_model_source,
         miewid_finetune_ckpt_path=settings.reid_miewid_finetune_ckpt_path,
+        weight_mode=settings.reid_weight_mode,
     )
     app.state.embedders = {
         "verification": verification_embedder,
@@ -47,7 +52,23 @@ async def lifespan(app: FastAPI):
     # Ensure collection exists with correct vector size.
     if reid_embedder.dim is None:
         raise RuntimeError("Failed to resolve embedding dimension")
-    store.ensure_collection(reid_embedder.dim)
+    logger.info(
+        "Connecting to Qdrant | url=%s | collection=%s | timeout_s=%s",
+        settings.qdrant_url,
+        settings.qdrant_collection,
+        settings.qdrant_timeout_s,
+    )
+    try:
+        store.ensure_collection(reid_embedder.dim)
+    except Exception:
+        logger.exception(
+            "Qdrant connection failed | url=%s | collection=%s | "
+            "hint: if running locally, start ./run_qdrant.sh and use QDRANT_URL=http://localhost:6333; "
+            "if running with docker-compose, use the container service URL such as http://qdrant:6333",
+            settings.qdrant_url,
+            settings.qdrant_collection,
+        )
+        raise
     app.state.vector_store = store
 
     # Detector (optional)

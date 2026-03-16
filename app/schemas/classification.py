@@ -51,7 +51,7 @@ class SimilarSearchRequest(BaseModel):
     pet_id: Optional[str] = None
     include_seed: bool = False
     query_instance_ids: List[str] = Field(default_factory=list, min_length=1)
-    merge: Literal["MAX", "RRF"] = "RRF"
+    merge: Literal["MAX", "RRF"] = "MAX"
     top_k_images: int = Field(default=200, ge=1, le=2000)
     per_query_limit: int = Field(default=400, ge=10, le=5000)
 

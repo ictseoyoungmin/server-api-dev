@@ -190,13 +190,14 @@ Use `--hard` to delete the collection itself:
 - `HF_CACHE_DIR`: mount a persistent volume to avoid re-downloading weights.
 
 ### Use finetuned MiewID checkpoint (optional)
-By default server loads baseline HF model (`conservationxlabs/miewid-msv3`).
-To use your finetuned checkpoint (`backbone+embed+bn`) from `MiewID/src`, set:
+Each profile (`verification`, `reid`) is configured independently.
+To use a finetuned checkpoint (`backbone+embed+bn`) for Re-ID, set:
 
 ```bash
-export MODEL_NAME=miewid
-export MIEWID_MODEL_SOURCE=conservationxlabs/miewid-msv3
-export MIEWID_FINETUNE_CKPT_PATH=/workspace/MiewID/src/outputs/train/ft_v2/checkpoints/ep25-val0.5721-miewidv3.ckpt
+export REID_MODEL_NAME=miewid
+export REID_WEIGHT_MODE=ft
+export REID_MIEWID_MODEL_SOURCE=models--conservationxlabs--miewid-msv3
+export REID_MIEWID_FINETUNE_CKPT_PATH=/workspace/MiewID/src/outputs/train/ft_v2/checkpoints/ep25-val0.5721-miewidv3.ckpt
 ```
 
 Then restart API. `GET /v1/health` will show `model_version` including ckpt filename when loaded.

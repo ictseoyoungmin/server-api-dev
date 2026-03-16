@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    admin,
     classification,
     daycares,
     embedding,
@@ -20,6 +21,7 @@ from app.api.v1.endpoints import (
 router = APIRouter()
 
 router.include_router(health.router, tags=["health"])
+router.include_router(admin.router, tags=["admin"])
 router.include_router(daycares.router, tags=["daycares"])
 router.include_router(embedding.router, tags=["embedding"])
 router.include_router(ingest.router, tags=["ingest"])

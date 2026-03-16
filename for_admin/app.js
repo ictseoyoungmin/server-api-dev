@@ -1,8 +1,17 @@
 const el = (id) => document.getElementById(id);
 
 const state = {
-  exemplars: [],
   daycares: [],
+  pets: [],
+  activePetId: null,
+  galleryView: "ALL",
+  galleryItems: [],
+  originalGalleryItems: [],
+  selectedImageIds: new Set(),
+  imageMetaCache: new Map(),
+  inspectedImageId: null,
+  searchScores: {},
+  activeExemplars: [],
 };
 
 function nowIso() {
@@ -10,16 +19,24 @@ function nowIso() {
 }
 
 function log(msg, obj) {
+  const box = el("logBox");
+  if (!box) return;
   const line = `[${nowIso()}] ${msg}`;
   const text = obj ? `${line}\n${JSON.stringify(obj, null, 2)}\n` : `${line}\n`;
-  const box = el("logBox");
   box.textContent = text + box.textContent;
 }
 
 function value(id) {
   const target = el(id);
-  if (!target) return "";
-  return target.value || "";
+  return target ? target.value || "" : "";
+}
+
+function currentDaycare() {
+  return value("workspaceDaycare").trim();
+}
+
+function currentDate() {
+  return value("workspaceDate").trim();
 }
 
 function apiBase() {
@@ -27,52 +44,17 @@ function apiBase() {
 }
 
 async function api(path, init = {}) {
-  const res = await fetch(`${apiBase()}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init.headers || {}),
-    },
-  });
+  const headers = { ...(init.headers || {}) };
+  if (!(init.body instanceof FormData) && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+  const res = await fetch(`${apiBase()}${path}`, { ...init, headers });
   const ct = res.headers.get("content-type") || "";
   const body = ct.includes("application/json") ? await res.json() : await res.text();
   if (!res.ok) {
     throw new Error(typeof body === "string" ? body : JSON.stringify(body));
   }
   return body;
-}
-
-async function apiForm(path, formData) {
-  const res = await fetch(`${apiBase()}${path}`, {
-    method: "POST",
-    body: formData,
-  });
-  const ct = res.headers.get("content-type") || "";
-  const body = ct.includes("application/json") ? await res.json() : await res.text();
-  if (!res.ok) {
-    throw new Error(typeof body === "string" ? body : JSON.stringify(body));
-  }
-  return body;
-}
-
-function boolParam(v) {
-  if (v === "") return null;
-  return v === "true";
-}
-
-function resolveDaycareId() {
-  return (
-    value("qDaycare") ||
-    value("uDaycare") ||
-    value("fDaycare") ||
-    value("dDaycare") ||
-    value("imgDaycare") ||
-    ""
-  ).trim();
-}
-
-function resolveUpdatedBy() {
-  return (value("uBy") || value("fBy") || "admin").trim();
 }
 
 function toQuery(params) {
@@ -85,560 +67,730 @@ function toQuery(params) {
   return s ? `?${s}` : "";
 }
 
-function applyDaycare(daycareId) {
-  ["qDaycare", "uDaycare", "fDaycare", "dDaycare", "imgDaycare"].forEach((id) => {
-    const target = el(id);
-    if (target) target.value = daycareId;
-  });
-  log("Applied daycare_id", { daycare_id: daycareId });
+function setWorkspaceDaycare(daycareId) {
+  el("workspaceDaycare").value = daycareId;
+  log("Applied daycare", { daycare_id: daycareId });
+}
+
+function selectedImageIds() {
+  return Array.from(state.selectedImageIds);
+}
+
+function selectedCountText() {
+  return `선택된 이미지 ${state.selectedImageIds.size}장`;
+}
+
+function currentTabForApi() {
+  if (state.galleryView === "PET") return "PET";
+  if (state.galleryView === "UNCLASSIFIED") return "UNCLASSIFIED";
+  return "ALL";
+}
+
+function setButtonBusy(button, busy) {
+  if (!button) return;
+  button.disabled = busy;
+  button.classList.toggle("is-busy", busy);
+  button.setAttribute("aria-busy", busy ? "true" : "false");
+}
+
+async function withButtonBusy(button, task) {
+  setButtonBusy(button, true);
+  try {
+    return await task();
+  } finally {
+    setButtonBusy(button, false);
+  }
 }
 
 function renderDaycares() {
-  const ul = el("daycareList");
-  ul.innerHTML = "";
-  state.daycares.forEach((dc) => {
+  const list = el("daycareList");
+  list.innerHTML = "";
+  if (!state.daycares.length) {
+    list.innerHTML = '<li><span class="daycare-label">등록된 daycare가 없습니다.</span></li>';
+    return;
+  }
+  state.daycares.forEach((item) => {
     const li = document.createElement("li");
     li.innerHTML = `
-      <div class="daycare-row">
-        <div class="daycare-id"><code>${dc.daycare_id}</code></div>
-        <div class="small">images=${dc.image_count} (daily=${dc.daily_image_count}, seed=${dc.seed_image_count}) · pets=${dc.pet_count} · instances=${dc.instance_count}</div>
-      </div>
-      <div class="actions">
-        <button data-act="select" data-id="${dc.daycare_id}">선택</button>
-        <button data-act="delete" data-id="${dc.daycare_id}" class="danger">삭제</button>
-      </div>
+      <span class="daycare-label"><code>${item.daycare_id}</code></span>
+      <span class="inline-actions">
+        <button data-act="select" data-id="${item.daycare_id}">적용</button>
+        <button data-act="delete" data-id="${item.daycare_id}" class="danger">삭제</button>
+      </span>
     `;
-    ul.appendChild(li);
+    list.appendChild(li);
   });
-
-  ul.querySelectorAll("button").forEach((btn) => {
+  list.querySelectorAll("button").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const daycareId = btn.dataset.id;
-      const act = btn.dataset.act;
-      if (act === "select") {
-        applyDaycare(daycareId);
+      if (btn.dataset.act === "select") {
+        setWorkspaceDaycare(daycareId);
+        await loadWorkspace();
         return;
       }
-      try {
-        await deleteDaycare(daycareId);
-      } catch (e) {
-        alert(`daycare 삭제 실패: ${e.message}`);
-        log("Delete daycare failed", { daycare_id: daycareId, error: e.message });
+      if (!confirm(`daycare '${daycareId}' 데이터를 삭제할까요?`)) return;
+      await api(`/daycares/${encodeURIComponent(daycareId)}${toQuery({ delete_qdrant: true, delete_storage: true })}`, {
+        method: "DELETE",
+      });
+      log("Deleted daycare", { daycare_id: daycareId });
+      if (currentDaycare() === daycareId) {
+        el("workspaceDaycare").value = "";
       }
+      await loadDaycares();
+      await loadQdrantStatus();
     });
   });
 }
 
-async function loadDaycares() {
-  const params = {
-    limit: Number(el("dcLimit").value || 100),
-    offset: 0,
-  };
-  let data;
-  try {
-    data = await api(`/daycares${toQuery(params)}`);
-  } catch (e) {
-    const msg = String(e?.message || e);
-    if (msg.includes("404")) {
-      throw new Error("`GET /v1/daycares` API가 없습니다. API 서버를 최신 코드로 재시작하세요.");
-    }
-    throw e;
+function renderPetButtons() {
+  const box = el("petButtons");
+  box.innerHTML = "";
+  el("petMeta").textContent = state.activePetId ? "active pet=" + state.activePetId : "";
+  if (!state.pets.length) {
+    box.innerHTML = '<div class="empty-state">초기 등록 pet이 아직 없습니다.</div>';
+    return;
   }
+  state.pets.forEach((pet) => {
+    const btn = document.createElement("button");
+    btn.className = `pet-pill${state.activePetId === pet.pet_id ? " active" : ""}`;
+    btn.textContent = pet.pet_name || pet.pet_id;
+    btn.addEventListener("click", async () => {
+      state.activePetId = pet.pet_id;
+      state.galleryView = "PET";
+      resetSearchRanking();
+      await Promise.all([loadActiveExemplars(), loadGallery()]);
+      renderPetButtons();
+      syncViewButtons();
+    });
+    box.appendChild(btn);
+  });
+}
+
+function renderActiveExemplars() {
+  const strip = el("activePetStrip");
+  strip.innerHTML = "";
+  if (!state.activePetId) {
+    strip.innerHTML = '<div class="empty-state">pet 버튼을 선택하면 해당 seed 이미지가 표시됩니다.</div>';
+    return;
+  }
+  if (!state.activeExemplars.length) {
+    strip.innerHTML = '<div class="empty-state">선택된 pet의 seed exemplar가 없습니다.</div>';
+    return;
+  }
+  state.activeExemplars.forEach((item) => {
+    const card = document.createElement("div");
+    card.className = "seed-card";
+    const src = item.image_id ? `${apiBase()}/images/${encodeURIComponent(item.image_id)}?variant=thumb` : "";
+    card.innerHTML = `
+      <img src="${src}" alt="${item.pet_id}" loading="lazy" />
+      <span>${item.pet_id}</span>
+      <code>${item.instance_id}</code>
+    `;
+    strip.appendChild(card);
+  });
+}
+
+function inferCardState(item) {
+  if (Array.isArray(item.pet_ids) && item.pet_ids.length > 0) return "accepted";
+  return "unreviewed";
+}
+
+function renderGallery() {
+  const grid = el("galleryGrid");
+  const meta = el("galleryMeta");
+  grid.innerHTML = "";
+  meta.textContent = `${state.galleryItems.length} images · view=${state.galleryView}${state.activePetId ? ` · pet=${state.activePetId}` : ""}`;
+  el("selectionMeta").textContent = selectedCountText();
+
+  if (!state.galleryItems.length) {
+    grid.innerHTML = '<div class="empty-state">표시할 daily 이미지가 없습니다.</div>';
+    return;
+  }
+
+  state.galleryItems.forEach((item) => {
+    const selected = state.selectedImageIds.has(item.image_id);
+    const card = document.createElement("article");
+    card.className = `gallery-card${selected ? " selected" : ""}`;
+    const score = state.searchScores[item.image_id];
+    const petLabel = Array.isArray(item.pet_ids) && item.pet_ids.length > 0 ? item.pet_ids.join(", ") : "미지정";
+    const cardState = inferCardState(item);
+    card.innerHTML = `
+      <div class="gallery-thumb-wrap">
+        <input class="card-check" type="checkbox" ${selected ? "checked" : ""} data-image-id="${item.image_id}" />
+        <img class="gallery-thumb" src="${item.thumb_url}" alt="${item.image_id}" loading="lazy" data-inspect="${item.image_id}" />
+      </div>
+      <div class="card-lines">
+        <div class="inline-actions wrap">
+          <span class="role-badge">${item.image_role}</span>
+          <span class="state-badge ${cardState}">${cardState.toUpperCase()}</span>
+          ${score !== undefined ? `<span class="score-badge">sim ${score.toFixed(2)}</span>` : ""}
+        </div>
+        <div class="pet-label">${petLabel}</div>
+        <div class="pet-sub"><code>${item.image_id}</code></div>
+        <div class="instance-meta">instances=${item.instance_count}</div>
+      </div>
+    `;
+    grid.appendChild(card);
+  });
+
+  grid.querySelectorAll(".card-check").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      const imageId = checkbox.dataset.imageId;
+      if (checkbox.checked) state.selectedImageIds.add(imageId);
+      else state.selectedImageIds.delete(imageId);
+      renderGallery();
+    });
+  });
+
+  grid.querySelectorAll("[data-inspect]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      await inspectImage(node.dataset.inspect);
+    });
+  });
+}
+
+function renderInspector(meta) {
+  const pane = el("detailPane");
+  const detailMeta = el("detailMeta");
+  if (!meta) {
+    pane.className = "detail-empty";
+    pane.textContent = "이미지를 클릭하면 instance 상세가 표시됩니다.";
+    detailMeta.textContent = "";
+    return;
+  }
+  detailMeta.textContent = meta.image?.image_id || "";
+  pane.className = "detail-body";
+  const petLabel = Array.isArray(meta.image?.pet_ids) && meta.image.pet_ids.length > 0 ? meta.image.pet_ids.join(", ") : "미지정";
+  pane.innerHTML = `
+    <div class="detail-hero">
+      <img src="${meta.image?.thumb_url || ""}" alt="${meta.image?.image_id || "detail"}" loading="lazy" />
+      <div>
+        <div class="pet-label">${petLabel}</div>
+        <div class="pet-sub"><code>${meta.image?.image_id || ""}</code></div>
+        <div class="pet-sub">captured_at=${meta.image?.captured_at || "n/a"}</div>
+      </div>
+    </div>
+    <div class="instance-list"></div>
+  `;
+  const list = pane.querySelector(".instance-list");
+  (meta.instances || []).forEach((inst) => {
+    const row = document.createElement("div");
+    row.className = "instance-row";
+    row.innerHTML = `
+      <div>
+        <div><code>${inst.instance_id}</code></div>
+        <div class="sub">species=${inst.species} · conf=${Number(inst.confidence || 0).toFixed(3)}</div>
+        <div class="sub">pet_id=${inst.pet_id || ""}</div>
+      </div>
+      <button data-copy="${inst.instance_id}">instance_id 복사</button>
+    `;
+    list.appendChild(row);
+  });
+  pane.querySelectorAll("[data-copy]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(btn.dataset.copy);
+      log("Copied instance_id", { instance_id: btn.dataset.copy });
+    });
+  });
+}
+
+function syncViewButtons() {
+  ["btnViewAll", "btnViewUnclassified", "btnViewPet"].forEach((id) => {
+    const button = el(id);
+    if (!button) return;
+    button.classList.toggle("active", button.dataset.view === state.galleryView);
+    button.classList.toggle("is-active", button.dataset.view === state.galleryView);
+  });
+}
+
+function resetSearchRanking() {
+  state.searchScores = {};
+  state.galleryItems = [...state.originalGalleryItems];
+}
+
+function selectAllVisibleImages() {
+  state.selectedImageIds = new Set(state.galleryItems.map((item) => item.image_id));
+  renderGallery();
+}
+
+function clearSelectedImages() {
+  state.selectedImageIds.clear();
+  renderGallery();
+}
+
+async function loadDaycares() {
+  const data = await api(`/daycares${toQuery({ limit: 200, offset: 0 })}`);
   state.daycares = data.items || [];
-  el("dcMeta").textContent = `count=${data.count} (DB 기준)`;
   renderDaycares();
-  log("Loaded daycares", { count: data.count });
+  log("Loaded daycares", { count: state.daycares.length });
 }
 
 async function loadQdrantStatus() {
   const data = await api("/health/qdrant");
-  const box = el("qdrantStatusBox");
-  if (box) {
-    const q = data?.qdrant || {};
-    const view = {
-      status: data?.status,
+  const q = data.qdrant || {};
+  el("qdrantStatusBox").textContent = JSON.stringify(
+    {
+      status: data.status,
       collection: q.collection,
       points_count: q.points_count,
       sampled_points: q.sampled_points,
       sampled_with_vector: q.sampled_with_vector,
       sampled_has_vector: q.sampled_has_vector,
       sampled_vector_dim: q.sampled_vector_dim,
-      collection_status: q.status,
-    };
-    box.textContent = JSON.stringify(view, null, 2);
-  }
-  log("Loaded qdrant status", { status: data.status });
+      status_detail: q.status,
+    },
+    null,
+    2
+  );
 }
 
-async function deleteDaycare(daycareId) {
-  const ok = confirm(
-    `daycare '${daycareId}'의 DB(Qdrant) + storage 데이터를 삭제합니다.\n테스트 초기화 용도이며 되돌릴 수 없습니다. 진행할까요?`
-  );
-  if (!ok) return;
+async function loadPets() {
+  const daycare = currentDaycare();
+  if (!daycare) throw new Error("daycare_id를 입력하세요.");
+  const data = await api(`/pets${toQuery({ daycare_id: daycare })}`);
+  state.pets = data.items || [];
+  if (state.activePetId && !state.pets.find((item) => item.pet_id === state.activePetId)) {
+    state.activePetId = null;
+  }
+  renderPetButtons();
+  if (!state.activePetId) {
+    state.activeExemplars = [];
+    renderActiveExemplars();
+  }
+}
 
+async function loadActiveExemplars() {
+  if (!currentDaycare() || !state.activePetId) {
+    state.activeExemplars = [];
+    renderActiveExemplars();
+    return;
+  }
   const data = await api(
-    `/daycares/${encodeURIComponent(daycareId)}${toQuery({
-      delete_qdrant: true,
-      delete_storage: true,
-    })}`,
-    { method: "DELETE" }
+    `/exemplars${toQuery({ daycare_id: currentDaycare(), pet_id: state.activePetId, active: true, limit: 30, offset: 0 })}`
   );
-  log("Deleted daycare", data);
-
-  if (resolveDaycareId() === daycareId) {
-    ["qDaycare", "uDaycare", "fDaycare", "dDaycare", "imgDaycare"].forEach((id) => {
-      const target = el(id);
-      if (target) target.value = "";
-    });
-  }
-
-  const list = el("imageList");
-  if (list) list.innerHTML = "";
-  const meta = el("imageMetaBox");
-  if (meta) meta.innerHTML = "";
-  const searchMeta = el("searchMeta");
-  if (searchMeta) searchMeta.textContent = "";
-  const exemplarBody = el("exemplarTbody");
-  if (exemplarBody) exemplarBody.innerHTML = "";
-  state.exemplars = [];
-
-  await loadDaycares();
-  await loadQdrantStatus();
+  state.activeExemplars = data.items || [];
+  renderActiveExemplars();
 }
 
-function renderExemplars() {
-  const tbody = el("exemplarTbody");
-  tbody.innerHTML = "";
-  state.exemplars.forEach((x) => {
-    const thumbUrl = x.image_id ? `${apiBase()}/images/${encodeURIComponent(x.image_id)}?variant=thumb` : "";
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${thumbUrl ? `<img class="ex-thumb" src="${thumbUrl}" alt="${x.image_id || x.instance_id}" loading="lazy" />` : ""}</td>
-      <td><code>${x.instance_id}</code></td>
-      <td><code>${x.pet_id}</code></td>
-      <td>${x.active}</td>
-      <td>${x.rank ?? ""}</td>
-      <td>${x.note ?? ""}</td>
-      <td><code>${x.image_id ?? ""}</code></td>
-      <td>${x.updated_at ?? ""}</td>
-      <td>
-        <button data-act="edit" data-id="${x.instance_id}">수정</button>
-        <button data-act="toggle" data-id="${x.instance_id}" class="warn">${x.active ? "비활성" : "활성"}</button>
-        <button data-act="delete" data-id="${x.instance_id}" class="danger">삭제</button>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  });
-
-  tbody.querySelectorAll("button").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const id = btn.dataset.id;
-      const act = btn.dataset.act;
-      try {
-        if (act === "delete") {
-          await onDelete(id);
-        } else if (act === "toggle") {
-          await onToggle(id);
-        } else {
-          await onEdit(id);
-        }
-        await loadExemplars();
-      } catch (e) {
-        alert(`실패: ${e.message}`);
-        log("Action failed", { id, act, error: e.message });
-      }
-    });
-  });
-}
-
-async function loadExemplars() {
-  const daycare = resolveDaycareId();
-  if (!daycare) {
-    throw new Error("daycare_id를 입력하세요. (검색/등록/빠른등록 중 하나)");
+async function loadGallery() {
+  const daycare = currentDaycare();
+  if (!daycare) throw new Error("daycare_id를 입력하세요.");
+  if (state.galleryView === "PET" && !state.activePetId) {
+    throw new Error("PET bucket view는 pet 버튼 선택 후 사용할 수 있습니다.");
   }
   const params = {
     daycare_id: daycare,
-    pet_id: el("qPet").value,
-    species: el("qSpecies").value,
-    active: boolParam(el("qActive").value),
-    q: el("qText").value,
-    limit: Number(el("qLimit").value || 200),
-    offset: 0,
-  };
-
-  const data = await api(`/exemplars${toQuery(params)}`);
-  state.exemplars = data.items || [];
-  el("searchMeta").textContent = `count=${data.count}`;
-  renderExemplars();
-  log("Loaded exemplars", { count: data.count });
-}
-
-function getDaycareForAction() {
-  return value("qDaycare") || value("uDaycare") || value("fDaycare") || value("dDaycare") || value("imgDaycare");
-}
-
-async function dailyUploadImages() {
-  const fileInput = el("dFiles");
-  if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
-    throw new Error("Daily 업로드할 이미지 파일들을 선택하세요.");
-  }
-
-  const daycare = (value("dDaycare") || resolveDaycareId()).trim();
-  if (!daycare) {
-    throw new Error("daycare_id를 입력하세요.");
-  }
-  const trainerId = value("dTrainer").trim() || "test_uploader";
-  const capturedAt = value("dCapturedAt").trim();
-
-  let success = 0;
-  let failed = 0;
-  const errors = [];
-
-  for (const file of Array.from(fileInput.files)) {
-    const fd = new FormData();
-    fd.append("file", file);
-    fd.append("daycare_id", daycare);
-    fd.append("trainer_id", trainerId);
-    fd.append("image_role", "DAILY");
-    if (capturedAt) fd.append("captured_at", capturedAt);
-    try {
-      await apiForm("/ingest", fd);
-      success += 1;
-    } catch (e) {
-      failed += 1;
-      errors.push({ file: file.name, error: e.message });
-    }
-  }
-
-  applyDaycare(daycare);
-  log("Daily upload done", {
-    daycare_id: daycare,
-    trainer_id: trainerId,
-    total_files: fileInput.files.length,
-    succeeded: success,
-    failed,
-    errors,
-  });
-
-  await loadDaycares();
-  await loadQdrantStatus();
-}
-
-async function onDelete(instanceId) {
-  const daycareId = getDaycareForAction();
-  const updatedBy = resolveUpdatedBy() || null;
-  if (!daycareId) throw new Error("daycare_id가 필요합니다.");
-  await api(`/exemplars/${encodeURIComponent(instanceId)}${toQuery({ daycare_id: daycareId, updated_by: updatedBy })}`, {
-    method: "DELETE",
-  });
-}
-
-async function onToggle(instanceId) {
-  const target = state.exemplars.find((x) => x.instance_id === instanceId);
-  if (!target) throw new Error("해당 exemplar를 찾지 못했습니다.");
-  const body = {
-    daycare_id: getDaycareForAction(),
-    updated_by: resolveUpdatedBy() || null,
-    active: !target.active,
-    sync_label: false,
-  };
-  await api(`/exemplars/${encodeURIComponent(instanceId)}`, {
-    method: "PATCH",
-    body: JSON.stringify(body),
-  });
-}
-
-async function onEdit(instanceId) {
-  const target = state.exemplars.find((x) => x.instance_id === instanceId);
-  if (!target) throw new Error("해당 exemplar를 찾지 못했습니다.");
-
-  const petId = prompt("pet_id", target.pet_id || "") ?? target.pet_id;
-  const note = prompt("note", target.note || "") ?? target.note;
-  const rankRaw = prompt("rank(숫자, 비우면 유지)", target.rank ?? "");
-  const active = confirm("활성 상태로 저장할까요? (취소=비활성)");
-
-  const body = {
-    daycare_id: getDaycareForAction(),
-    updated_by: resolveUpdatedBy() || null,
-    pet_id: petId,
-    note: note,
-    active,
-    sync_label: true,
-  };
-  if (rankRaw !== null && String(rankRaw).trim() !== "") {
-    body.rank = Number(rankRaw);
-  }
-
-  await api(`/exemplars/${encodeURIComponent(instanceId)}`, {
-    method: "PATCH",
-    body: JSON.stringify(body),
-  });
-}
-
-async function loadImages() {
-  const daycare = (el("imgDaycare").value || resolveDaycareId() || el("fDaycare").value || "").trim();
-  if (!daycare) {
-    throw new Error("daycare_id를 입력하세요. (이미지 조회/검색/등록 중 하나)");
-  }
-  const imageType = (el("imgRole").value || "DAILY").toUpperCase();
-  const includeSeed = imageType !== "DAILY";
-  const params = {
-    daycare_id: daycare,
-    date: el("imgDate").value || null,
-    include_seed: includeSeed,
-    limit: Number(el("imgLimit").value || 50),
+    date: currentDate() || null,
+    tab: currentTabForApi(),
+    pet_id: state.galleryView === "PET" ? state.activePetId : null,
+    include_seed: false,
+    limit: 500,
     offset: 0,
   };
   const data = await api(`/images${toQuery(params)}`);
-  let imagePetMap = {};
-  try {
-    const ex = await api(
-      `/exemplars${toQuery({
-        daycare_id: params.daycare_id,
-        active: true,
-        limit: 2000,
-        offset: 0,
-      })}`
-    );
-    imagePetMap = (ex.items || []).reduce((acc, item) => {
-      const imageId = item.image_id;
-      if (!imageId) return acc;
-      if (!acc[imageId]) acc[imageId] = new Set();
-      acc[imageId].add(item.pet_id);
-      return acc;
-    }, {});
-  } catch (e) {
-    log("Exemplar map load skipped", { error: e.message });
-  }
-  const ul = el("imageList");
-  ul.innerHTML = "";
-
-  const items = (data.items || []).filter((img) => {
-    const role = String(img.image_role || "DAILY").toUpperCase();
-    if (imageType === "ALL") return true;
-    return role === imageType;
-  });
-
-  items.forEach((img) => {
-    const role = String(img.image_role || "DAILY").toUpperCase();
-    const fromImage = Array.isArray(img.pet_ids) ? img.pet_ids.filter(Boolean) : [];
-    const fromExemplar = imagePetMap[img.image_id] ? Array.from(imagePetMap[img.image_id]) : [];
-    const petNames = fromImage.length > 0 ? fromImage.join(", ") : fromExemplar.length > 0 ? fromExemplar.join(", ") : "미지정";
-    const li = document.createElement("li");
-    li.innerHTML = `
-      <div class="image-list-item">
-        <img class="thumb" src="${img.thumb_url || ""}" alt="${img.image_id}" loading="lazy" />
-        <div>
-          <div><span class="role-badge ${role === "SEED" ? "seed" : "daily"}">${role}</span> <strong>${petNames}</strong></div>
-          <div class="small"><code>${img.image_id}</code> · instances=${img.instance_count}</div>
-        </div>
-      </div>
-      <button data-id="${img.image_id}">열기</button>
-    `;
-    ul.appendChild(li);
-  });
-
-  ul.querySelectorAll("button").forEach((btn) => {
-    btn.addEventListener("click", () => showImageMeta(btn.dataset.id));
-  });
-
-  log("Loaded images", {
-    role: imageType,
-    api_count: Number(data.count || 0),
-    filtered_count: items.length,
-  });
+  state.galleryItems = data.items || [];
+  state.originalGalleryItems = [...state.galleryItems];
+  state.selectedImageIds.clear();
+  state.imageMetaCache.clear();
+  state.searchScores = {};
+  renderGallery();
+  log("Loaded gallery", { view: state.galleryView, count: state.galleryItems.length, pet_id: state.activePetId });
 }
 
-async function showImageMeta(imageId) {
-  const data = await api(`/images/${encodeURIComponent(imageId)}/meta`);
-  const box = el("imageMetaBox");
-  box.innerHTML = `
-    <h3><code>${imageId}</code></h3>
-    <div class="meta-preview">
-      <img class="meta-thumb" src="${data.image?.thumb_url || ""}" alt="${imageId}" loading="lazy" />
-      <div class="small">
-        <a href="${data.image?.raw_url || "#"}" target="_blank" rel="noopener noreferrer">raw</a>
-        |
-        <a href="${data.image?.thumb_url || "#"}" target="_blank" rel="noopener noreferrer">thumb</a>
-      </div>
-    </div>
-  `;
+async function inspectImage(imageId) {
+  state.inspectedImageId = imageId;
+  let meta = state.imageMetaCache.get(imageId);
+  if (!meta) {
+    meta = await api(`/images/${encodeURIComponent(imageId)}/meta`);
+    state.imageMetaCache.set(imageId, meta);
+  }
+  renderInspector(meta);
+}
 
-  (data.instances || []).forEach((inst) => {
-    const div = document.createElement("div");
-    div.className = "instance-row";
-    div.innerHTML = `
-      <div>
-        <div><code>${inst.instance_id}</code></div>
-        <div>species=${inst.species} conf=${inst.confidence?.toFixed?.(3) ?? inst.confidence}</div>
-      </div>
-      <button data-ins="${inst.instance_id}">검색어에 복사</button>
-    `;
-    box.appendChild(div);
-  });
+async function loadWorkspace() {
+  const daycare = currentDaycare();
+  if (!daycare) throw new Error("daycare_id를 입력하세요.");
+  el("workspaceMeta").textContent = `${daycare}${currentDate() ? ` · ${currentDate()}` : ""}`;
+  await Promise.all([loadPets(), state.activePetId ? loadActiveExemplars() : Promise.resolve()]);
+  await loadGallery();
+}
 
-  box.querySelectorAll("button").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const existing = value("qText");
-      const target = el("qText");
-      if (target) target.value = existing ? `${existing} ${btn.dataset.ins}` : btn.dataset.ins;
-      log("Copied instance_id to search field", { instance_id: btn.dataset.ins });
-    });
+async function autoClassify() {
+  const daycare = currentDaycare();
+  const date = currentDate();
+  if (!daycare || !date) throw new Error("자동 분류에는 daycare_id와 date가 모두 필요합니다.");
+  const autoThreshold = Number(value("autoAcceptThreshold") || 0.6);
+  const body = {
+    daycare_id: daycare,
+    date,
+    auto_accept_threshold: autoThreshold,
+    candidate_threshold: autoThreshold,
+    labeled_by: "admin_dashboard",
+  };
+  const data = await api("/classify/auto", { method: "POST", body: JSON.stringify(body) });
+  el("opsMeta").textContent = `accepted=${data.summary.accepted} · candidate=${data.summary.unreviewed_candidate} · no_candidate=${data.summary.unreviewed_no_candidate}`;
+  log("Auto classify done", data.summary);
+  await loadGallery();
+}
+
+async function finalizeBuckets() {
+  const daycare = currentDaycare();
+  const date = currentDate();
+  if (!daycare || !date) throw new Error("버킷 확정에는 daycare_id와 date가 필요합니다.");
+  const data = await api("/buckets/finalize", {
+    method: "POST",
+    body: JSON.stringify({ daycare_id: daycare, date }),
   });
+  el("opsMeta").textContent = `bucket_count=${data.bucket_count} · total_images=${data.total_images}`;
+  log("Buckets finalized", { bucket_count: data.bucket_count, total_images: data.total_images });
+}
+
+async function resolveRepresentativeInstanceIds(imageIds) {
+  const ids = [];
+  for (const imageId of imageIds) {
+    let meta = state.imageMetaCache.get(imageId);
+    if (!meta) {
+      meta = await api(`/images/${encodeURIComponent(imageId)}/meta`);
+      state.imageMetaCache.set(imageId, meta);
+    }
+    const instances = Array.isArray(meta.instances) ? meta.instances : [];
+    if (!instances.length) continue;
+    let chosen = null;
+    if (state.activePetId) {
+      chosen = instances.find(
+        (inst) => String(inst.pet_id || "") === state.activePetId && String(inst.assignment_status || "").toUpperCase() === "ACCEPTED"
+      );
+    }
+    if (!chosen) {
+      chosen = [...instances].sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0))[0];
+    }
+    if (chosen?.instance_id) ids.push(chosen.instance_id);
+  }
+  return [...new Set(ids)];
+}
+
+async function runSimilarSearch() {
+  const daycare = currentDaycare();
+  const date = currentDate();
+  const imageIds = selectedImageIds();
+  if (!daycare || !date) throw new Error("유사 정렬에는 daycare_id와 date가 필요합니다.");
+  if (!imageIds.length) throw new Error("유사 정렬 기준 이미지를 1장 이상 선택하세요.");
+  const queryInstanceIds = await resolveRepresentativeInstanceIds(imageIds);
+  if (!queryInstanceIds.length) throw new Error("선택된 이미지에서 query instance를 찾지 못했습니다.");
+  const data = await api("/classify/similar", {
+    method: "POST",
+    body: JSON.stringify({
+      daycare_id: daycare,
+      date,
+      tab: currentTabForApi(),
+      pet_id: state.galleryView === "PET" ? state.activePetId : null,
+      include_seed: false,
+      query_instance_ids: queryInstanceIds,
+      merge: "MAX",
+      top_k_images: Number(value("similarTopK") || 80),
+      per_query_limit: 400,
+    }),
+  });
+  state.searchScores = Object.fromEntries((data.results || []).map((item) => [item.image_id, Number(item.score)]));
+  const selectedOrder = new Map(imageIds.map((imageId, idx) => [imageId, idx]));
+  const order = new Map((data.results || []).map((item, idx) => [item.image_id, idx]));
+  state.galleryItems = [...state.originalGalleryItems].sort((a, b) => {
+    const aSelected = selectedOrder.has(a.image_id);
+    const bSelected = selectedOrder.has(b.image_id);
+    if (aSelected && bSelected) {
+      return selectedOrder.get(a.image_id) - selectedOrder.get(b.image_id);
+    }
+    if (aSelected) return -1;
+    if (bSelected) return 1;
+
+    const ai = order.has(a.image_id) ? order.get(a.image_id) : Number.MAX_SAFE_INTEGER;
+    const bi = order.has(b.image_id) ? order.get(b.image_id) : Number.MAX_SAFE_INTEGER;
+    if (ai !== bi) return ai - bi;
+    return 0;
+  });
+  renderGallery();
+  log("Similar ranking applied", data.query_debug);
+}
+
+async function labelSelectedImages(action) {
+  const daycare = currentDaycare();
+  const date = currentDate();
+  const imageIds = selectedImageIds();
+  if (!daycare || !date) throw new Error("daycare_id와 date가 필요합니다.");
+  if (!imageIds.length) throw new Error("먼저 daily 이미지를 선택하세요.");
+  if (action === "ACCEPT" && !state.activePetId) throw new Error("포함 작업에는 active pet 선택이 필요합니다.");
+  const data = await api("/admin/images/labels", {
+    method: "POST",
+    body: JSON.stringify({
+      daycare_id: daycare,
+      date,
+      image_ids: imageIds,
+      action,
+      pet_id: state.activePetId,
+      labeled_by: "admin_dashboard",
+      confidence: 1.0,
+      source: "MANUAL",
+      select_mode: value("selectionMode") || "BEST_CONFIDENCE",
+    }),
+  });
+  log("Applied image label action", { action, count: data.items.length, pet_id: state.activePetId });
+  await loadGallery();
 }
 
 async function quickUploadExemplar() {
+  const daycare = currentDaycare();
+  if (!daycare) throw new Error("daycare_id를 입력하세요.");
   const fileInput = el("uFile");
-  if (!fileInput.files || fileInput.files.length === 0) {
-    throw new Error("이미지 파일을 선택하세요.");
-  }
-  const daycare = resolveDaycareId();
-  if (!daycare) {
-    throw new Error("daycare_id를 입력하세요. (빠른 등록/등록/검색 중 하나의 daycare_id)");
-  }
-
+  if (!fileInput.files || !fileInput.files.length) throw new Error("seed 이미지 파일을 선택하세요.");
+  const petName = value("uPetName").trim();
+  if (!petName) throw new Error("pet name을 입력하세요.");
   const fd = new FormData();
-  fd.append("file", fileInput.files[0]);
   fd.append("daycare_id", daycare);
-  fd.append("pet_name", el("uPetName").value);
-  fd.append("updated_by", el("uBy").value || "");
-  fd.append("trainer_id", el("uTrainer").value || "");
-  fd.append("captured_at", el("uCapturedAt").value || "");
-  fd.append("sync_label", String(el("uSyncLabel").checked));
-  fd.append("apply_to_all_instances", String(el("uAllInstances").checked));
-  const data = await apiForm("/exemplars/upload", fd);
-  // Keep query/create forms in sync so subsequent list refresh won't miss daycare_id.
-  applyDaycare(daycare);
-  log("Quick upload done", data);
-  await loadDaycares();
+  fd.append("pet_name", petName);
+  fd.append("updated_by", "admin_dashboard");
+  fd.append("sync_label", "true");
+  fd.append("apply_to_all_instances", "false");
+  fd.append("file", fileInput.files[0]);
+  const data = await api("/exemplars/upload", { method: "POST", body: fd });
+  log("Quick seed upload done", data);
+  await loadWorkspace();
 }
 
 async function folderUploadExemplars() {
+  const daycare = currentDaycare();
+  if (!daycare) throw new Error("daycare_id를 입력하세요.");
   const folderInput = el("fFolder");
-  if (!folderInput.files || folderInput.files.length === 0) {
-    throw new Error("폴더(파일들)를 선택하세요.");
-  }
-  const daycare = (el("fDaycare").value || resolveDaycareId()).trim();
-  if (!daycare) {
-    throw new Error("daycare_id를 입력하세요.");
-  }
-
+  if (!folderInput.files || !folderInput.files.length) throw new Error("pet 폴더를 선택하세요.");
   const fd = new FormData();
   fd.append("daycare_id", daycare);
-  fd.append("updated_by", el("fBy").value || "");
-  fd.append("trainer_id", el("fTrainer").value || "");
-  fd.append("captured_at", el("fCapturedAt").value || "");
-  fd.append("sync_label", String(el("fSyncLabel").checked));
-  fd.append("apply_to_all_instances", String(el("fAllInstances").checked));
-  fd.append("skip_on_error", String(el("fSkipOnError").checked));
-
+  fd.append("updated_by", "admin_dashboard");
+  fd.append("sync_label", "true");
+  fd.append("apply_to_all_instances", "false");
+  fd.append("skip_on_error", "true");
   Array.from(folderInput.files).forEach((file) => {
     fd.append("files", file);
     fd.append("relative_paths", file.webkitRelativePath || file.name);
   });
-
-  const data = await apiForm("/exemplars/upload-folder", fd);
-  applyDaycare(daycare);
-  log("Folder upload done", data);
-  await loadDaycares();
+  const data = await api("/exemplars/upload-folder", { method: "POST", body: fd });
+  log("Seed folder upload done", { succeeded: data.succeeded, failed: data.failed });
+  await loadWorkspace();
 }
 
-function bindEvents() {
-  const bindClick = (id, fn) => {
-    const target = el(id);
-    if (!target) {
-      log("UI binding skipped: missing element", { id });
-      return;
-    }
-    target.addEventListener("click", fn);
-  };
-
-  bindClick("btnLoadDaycares", async () => {
+async function dailyUploadImages() {
+  const daycare = currentDaycare();
+  if (!daycare) throw new Error("daycare_id를 입력하세요.");
+  const input = el("dFiles");
+  if (!input.files || !input.files.length) throw new Error("daily 이미지 파일을 선택하세요.");
+  let success = 0;
+  let failed = 0;
+  for (const file of Array.from(input.files)) {
+    const fd = new FormData();
+    fd.append("daycare_id", daycare);
+    fd.append("trainer_id", "admin_dashboard");
+    fd.append("image_role", "DAILY");
+    fd.append("file", file);
     try {
-      await loadDaycares();
-    } catch (e) {
-      alert(`daycare 목록 조회 실패: ${e.message}`);
-      log("Load daycares failed", { error: e.message });
+      await api("/ingest", { method: "POST", body: fd });
+      success += 1;
+    } catch (err) {
+      failed += 1;
+      log("Daily upload failed for file", { file: file.name, error: err.message });
     }
-  });
+  }
+  log("Daily upload done", { succeeded: success, failed });
+  await loadGallery();
+}
 
-  bindClick("btnQdrantStatus", async () => {
-    try {
-      await loadQdrantStatus();
-    } catch (e) {
-      alert(`Qdrant 상태 조회 실패: ${e.message}`);
-      log("Load qdrant status failed", { error: e.message });
-    }
-  });
-
-  bindClick("btnSearch", async () => {
-    try {
-      await loadExemplars();
-    } catch (e) {
-      alert(`조회 실패: ${e.message}`);
-      log("Search failed", { error: e.message });
-    }
-  });
-
-  bindClick("btnRefresh", loadExemplars);
-
-  bindClick("btnLoadImages", async () => {
-    try {
-      await loadImages();
-    } catch (e) {
-      alert(`이미지 조회 실패: ${e.message}`);
-      log("Load images failed", { error: e.message });
-    }
-  });
-
-  bindClick("btnQuickUpload", async () => {
-    try {
-      await quickUploadExemplar();
-      await loadExemplars();
-    } catch (e) {
-      alert(`빠른 등록 실패: ${e.message}`);
-      log("Quick upload failed", { error: e.message });
-    }
-  });
-
-  bindClick("btnFolderUpload", async () => {
-    try {
-      await folderUploadExemplars();
-      await loadExemplars();
-    } catch (e) {
-      alert(`폴더 일괄 등록 실패: ${e.message}`);
-      log("Folder upload failed", { error: e.message });
-    }
-  });
-
-  bindClick("btnDailyUpload", async () => {
-    try {
-      await dailyUploadImages();
-      await loadImages();
-    } catch (e) {
-      alert(`Daily 업로드 실패: ${e.message}`);
-      log("Daily upload failed", { error: e.message });
-    }
+function bindViewButtons() {
+  ["btnViewAll", "btnViewUnclassified", "btnViewPet"].forEach((id) => {
+    el(id).addEventListener("click", async () => {
+      const nextView = el(id).dataset.view;
+      if (nextView === "PET" && !state.activePetId) {
+        alert("먼저 pet 버튼을 선택하세요.");
+        return;
+      }
+      state.galleryView = nextView;
+      resetSearchRanking();
+      syncViewButtons();
+      await loadGallery();
+    });
   });
 }
 
 function bootstrapDefaults() {
-  const origin = window.location.origin;
-  const root = `${origin}/v1`;
-  const apiBaseInput = el("apiBase");
-  if (apiBaseInput) apiBaseInput.value = root;
+  el("apiBase").value = `${window.location.origin}/v1`;
+  const today = new Date().toISOString().slice(0, 10);
+  el("workspaceDate").value = today;
 }
 
-function init() {
+function bindEvents() {
+  el("btnLoadWorkspace").addEventListener("click", async () => {
+    const button = el("btnLoadWorkspace");
+    try {
+      await withButtonBusy(button, () => loadWorkspace());
+    } catch (err) {
+      alert(err.message);
+      log("Load workspace failed", { error: err.message });
+    }
+  });
+
+  el("btnLoadDaycares").addEventListener("click", async () => {
+    const button = el("btnLoadDaycares");
+    try {
+      await withButtonBusy(button, () => loadDaycares());
+    } catch (err) {
+      alert(err.message);
+      log("Load daycares failed", { error: err.message });
+    }
+  });
+
+  el("btnQdrantStatus").addEventListener("click", async () => {
+    const button = el("btnQdrantStatus");
+    try {
+      await withButtonBusy(button, () => loadQdrantStatus());
+    } catch (err) {
+      alert(err.message);
+      log("Qdrant status failed", { error: err.message });
+    }
+  });
+
+  el("btnAutoClassify").addEventListener("click", async () => {
+    const button = el("btnAutoClassify");
+    try {
+      await withButtonBusy(button, () => autoClassify());
+    } catch (err) {
+      alert(err.message);
+      log("Auto classify failed", { error: err.message });
+    }
+  });
+
+  el("btnFinalize").addEventListener("click", async () => {
+    const button = el("btnFinalize");
+    try {
+      await withButtonBusy(button, () => finalizeBuckets());
+    } catch (err) {
+      alert(err.message);
+      log("Finalize failed", { error: err.message });
+    }
+  });
+
+  el("btnReloadGallery").addEventListener("click", async () => {
+    const button = el("btnReloadGallery");
+    try {
+      await withButtonBusy(button, async () => {
+        resetSearchRanking();
+        await loadGallery();
+      });
+    } catch (err) {
+      alert(err.message);
+      log("Reload gallery failed", { error: err.message });
+    }
+  });
+
+  el("btnSimilarSearch").addEventListener("click", async () => {
+    const button = el("btnSimilarSearch");
+    try {
+      await withButtonBusy(button, () => runSimilarSearch());
+    } catch (err) {
+      alert(err.message);
+      log("Similar search failed", { error: err.message });
+    }
+  });
+
+  el("btnClearRanking").addEventListener("click", () => {
+    resetSearchRanking();
+    renderGallery();
+    log("Ranking reset");
+  });
+
+  el("btnSelectAll").addEventListener("click", () => {
+    selectAllVisibleImages();
+    log("Selected all visible images", { count: state.galleryItems.length });
+  });
+
+  el("btnClearSelection").addEventListener("click", () => {
+    clearSelectedImages();
+    log("Cleared selected images");
+  });
+
+  el("btnAssignSelected").addEventListener("click", async () => {
+    const button = el("btnAssignSelected");
+    try {
+      await withButtonBusy(button, () => labelSelectedImages("ACCEPT"));
+    } catch (err) {
+      alert(err.message);
+      log("Assign selected failed", { error: err.message });
+    }
+  });
+
+  el("btnClearSelected").addEventListener("click", async () => {
+    const button = el("btnClearSelected");
+    try {
+      await withButtonBusy(button, () => labelSelectedImages("CLEAR"));
+    } catch (err) {
+      alert(err.message);
+      log("Clear selected failed", { error: err.message });
+    }
+  });
+
+  el("btnRejectSelected").addEventListener("click", async () => {
+    const button = el("btnRejectSelected");
+    try {
+      await withButtonBusy(button, () => labelSelectedImages("REJECT"));
+    } catch (err) {
+      alert(err.message);
+      log("Reject selected failed", { error: err.message });
+    }
+  });
+
+  el("btnQuickUpload").addEventListener("click", async () => {
+    const button = el("btnQuickUpload");
+    try {
+      await withButtonBusy(button, () => quickUploadExemplar());
+    } catch (err) {
+      alert(err.message);
+      log("Quick upload failed", { error: err.message });
+    }
+  });
+
+  el("btnFolderUpload").addEventListener("click", async () => {
+    const button = el("btnFolderUpload");
+    try {
+      await withButtonBusy(button, () => folderUploadExemplars());
+    } catch (err) {
+      alert(err.message);
+      log("Folder upload failed", { error: err.message });
+    }
+  });
+
+  el("btnDailyUpload").addEventListener("click", async () => {
+    const button = el("btnDailyUpload");
+    try {
+      await withButtonBusy(button, () => dailyUploadImages());
+    } catch (err) {
+      alert(err.message);
+      log("Daily upload failed", { error: err.message });
+    }
+  });
+
+  bindViewButtons();
+}
+
+async function init() {
   bootstrapDefaults();
   bindEvents();
-  log("Admin dashboard ready");
-  loadDaycares().catch((e) => {
-    log("Initial daycare load skipped", { error: e.message });
-  });
-  loadQdrantStatus().catch((e) => {
-    log("Initial qdrant status load skipped", { error: e.message });
-  });
+  renderInspector(null);
+  renderPetButtons();
+  renderActiveExemplars();
+  renderGallery();
+  syncViewButtons();
+  log("Admin workspace ready");
+  try {
+    await loadDaycares();
+    await loadQdrantStatus();
+  } catch (err) {
+    log("Initial bootstrap skipped", { error: err.message });
+  }
 }
 
 init();

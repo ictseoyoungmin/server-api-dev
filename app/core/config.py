@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/v1"
     log_level: str = "INFO"
     log_tz: str = Field(
-        default="UTC",
+        default="KST",
         description="Timezone label for app log formatter. Example: UTC, Asia/Seoul, KST",
     )
     log_tz_offset: Optional[str] = Field(
@@ -65,25 +65,21 @@ class Settings(BaseSettings):
         default="miewid",
         description="Embedding model selector. Supported: miewid, mega-l-224, mega-t, clip, dinov2",
     )
-    miewid_model_source: str = Field(
-        default="conservationxlabs/miewid-msv3",
-        description="HF model source for miewid baseline backbone load.",
-    )
-    miewid_finetune_ckpt_path: Optional[Path] = Field(
-        default=None,
-        description="Optional Lightning finetune checkpoint path. If set, loads backbone+embed+bn from ckpt.",
-    )
     verification_model_name: str = Field(
         default="miewid",
         description="Embedding model selector for verification APIs.",
     )
     verification_miewid_model_source: str = Field(
         default="conservationxlabs/miewid-msv3",
-        description="HF/local model source for verification miewid load.",
+        description="HF/local model source for verification miewid load. Relative local paths are resolved against HF_CACHE_DIR.",
     )
     verification_miewid_finetune_ckpt_path: Optional[Path] = Field(
         default=None,
         description="Optional verification miewid finetune checkpoint path.",
+    )
+    verification_weight_mode: Literal["auto", "hf", "ft"] = Field(
+        default="auto",
+        description="Weight selection mode for verification embedder. auto=legacy(hf then optional ft), hf=HF only, ft=FT only.",
     )
     reid_model_name: str = Field(
         default="miewid",
@@ -91,11 +87,15 @@ class Settings(BaseSettings):
     )
     reid_miewid_model_source: str = Field(
         default="conservationxlabs/miewid-msv3",
-        description="HF/local model source for Re-ID miewid load.",
+        description="HF/local model source for Re-ID miewid load. Relative local paths are resolved against HF_CACHE_DIR.",
     )
     reid_miewid_finetune_ckpt_path: Optional[Path] = Field(
         default=None,
         description="Optional Re-ID miewid finetune checkpoint path.",
+    )
+    reid_weight_mode: Literal["auto", "hf", "ft"] = Field(
+        default="auto",
+        description="Weight selection mode for re-id embedder. auto=legacy(hf then optional ft), hf=HF only, ft=FT only.",
     )
     hf_cache_dir: Path = Field(
         default=Path("./weights"),

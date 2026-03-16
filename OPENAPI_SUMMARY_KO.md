@@ -52,6 +52,7 @@
 | `POST /v1/classify/similar` | - | O | 탭 내 유사 정렬 |
 | `POST /v1/buckets/finalize` | - | O | 일자 버킷 확정 |
 | `GET /v1/buckets/{daycare_id}/{day}` | - | O | 버킷 manifest 조회 |
+| `POST /v1/admin/images/labels` | - | O | 관리자용 image_id 단위 bucket 포함/해제/제외 |
 
 ## 1. 루트 / 헬스체크
 
@@ -477,7 +478,7 @@ Query Parameters:
 
 비고:
 - `/v1/pets`는 Qdrant payload를 직접 조회해 `pet_id`와 `seed_pet_id`를 집계합니다.
-- `pet_name`은 `storage_dir/pets` 디렉터리 구조를 기반으로 추론됩니다.
+- `pet_name`은 `shared_storage_dir/registry/pets/{daycare_id}.json` 매핑을 우선 사용합니다.
 - Classification 앱에서는 PET 탭/라벨링 대상 선택의 기준 목록으로 사용합니다.
 - Verification 앱에서 사용할 경우, 서버 기준 pet 목록 동기화 UI 용도로만 사용하는 것을 권장합니다.
 
@@ -585,6 +586,51 @@ Query Parameters:
 - 반자동 자동분류(`/v1/classify/auto`)는 이 Exemplar 풀만 참조합니다.
 - Facebank(`sync-images`)와는 별도 자원입니다.
 
+### `POST /v1/admin/images/labels`
+관리자 대시보드용 image-level 라벨링 API
+
+사용 앱:
+- Semi-Auto Classification 관리자 Dashboard
+
+비고:
+- `instance_id` 대신 `image_id` 배열을 받아 대표 instance를 서버가 선택합니다.
+- `action=ACCEPT | CLEAR | REJECT`를 지원합니다.
+- `select_mode=BEST_CONFIDENCE | ALL` 를 지원합니다.
+- seed 이미지는 대상에서 제외하고, Qdrant payload와 local meta sidecar를 함께 갱신합니다.
+
+요청 바디 예시:
+```json
+{
+  "daycare_id": "dc_001",
+  "date": "2026-03-15",
+  "image_ids": ["img_a", "img_b"],
+  "action": "ACCEPT",
+  "pet_id": "pet_pomi",
+  "labeled_by": "admin_dashboard",
+  "confidence": 1.0,
+  "source": "MANUAL",
+  "select_mode": "BEST_CONFIDENCE"
+}
+```
+
+응답 예시:
+```json
+{
+  "daycare_id": "dc_001",
+  "action": "ACCEPT",
+  "pet_id": "pet_pomi",
+  "labeled_at": "2026-03-15T10:00:00Z",
+  "items": [
+    {
+      "image_id": "img_a",
+      "selected_instance_ids": ["ins_..."],
+      "updated_count": 1,
+      "skipped_reason": null
+    }
+  ]
+}
+```
+
 ## 9. Facebank 이미지 동기화 (해시 기반 중복 제거)
 
 ### `GET /v1/sync-images`
@@ -666,9 +712,9 @@ Form Fields:
 - `500`: 해시 인덱스 파일 파싱 실패
 
 저장 구조 (현재 코드 기준):
-- `data/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/images/*`
-- `data/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/hash_index.json`
-- `data/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/facebank_meta.json`
+- `verification_storage_dir/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/images/*`
+- `verification_storage_dir/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/hash_index.json`
+- `verification_storage_dir/pets/{petId}/{petName}/facebanks/{facebankId}/v{facebankVersion}/facebank_meta.json`
 
 ## 9. 인증 시도(Trial) 업로드
 
@@ -733,9 +779,9 @@ Form Fields:
 - `timestamp`에 타임존 정보가 없으면 서버는 비즈니스 타임존(`settings.business_tz`, 기본 `Asia/Seoul`) 기준으로 해석합니다.
 
 저장 구조 (현재 코드 기준):
-- `data/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.json`
-- `data/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.{jpg|png|webp}`
-- (`petName` 미전송 시 레거시 경로 `data/trials/{YYYY-MM-DD}` 사용)
+- `verification_storage_dir/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.json`
+- `verification_storage_dir/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.{jpg|png|webp}`
+- (`petName` 미전송 시 fallback 경로 `verification_storage_dir/trials/{YYYY-MM-DD}` 사용)
 
 ## 10. 분류 보조/버킷 확정 (Semi-auto Classification)
 

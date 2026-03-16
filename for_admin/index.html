@@ -3,169 +3,150 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Exemplar Admin Dashboard</title>
+    <title>PetID Admin Workspace</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <header class="hero">
       <div>
-        <p class="eyebrow">PetID Admin</p>
-        <h1>초기등록 이미지 관리</h1>
-        <p class="subtitle">Exemplar(Seed) CRUD + 검색 + 인스턴스 탐색</p>
+        <p class="eyebrow">PetID Operations Console</p>
+        <h1>Seed-Driven Daily Classification</h1>
+        <p class="subtitle">초기 등록 이미지 관리, 반자동 분류 검수, 이미지 기반 정렬을 한 화면에서 처리합니다.</p>
       </div>
-      <div class="conn">
-        <label for="apiBase">API Base</label>
-        <input id="apiBase" type="text" />
-      </div>
+      <label class="api-base">API Base<input id="apiBase" type="text" /></label>
     </header>
 
-    <main>
-      <section class="card">
-        <h2>0) Daycare 목록</h2>
-        <p class="hint">DB(Qdrant)에 등록된 daycare_id 목록을 조회하고, 선택한 값을 전체 폼에 적용합니다.</p>
-        <div class="grid">
-          <label>Limit<input id="dcLimit" type="number" min="1" max="500" value="100" /></label>
-        </div>
-        <div class="actions">
-          <button id="btnLoadDaycares" class="primary">목록 새로고침</button>
-        </div>
-        <div id="dcMeta" class="meta"></div>
-        <ul id="daycareList" class="daycare-list"></ul>
-      </section>
+    <main class="dashboard">
+      <aside class="sidebar">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Workspace</h2>
+            <button id="btnLoadWorkspace" class="primary">불러오기</button>
+          </div>
+          <div class="grid two">
+            <label>Daycare ID<input id="workspaceDaycare" placeholder="dc_001" /></label>
+            <label>Date<input id="workspaceDate" type="date" /></label>
+          </div>
+          <div class="inline-actions">
+            <button id="btnLoadDaycares">Daycare 목록</button>
+            <button id="btnQdrantStatus">Qdrant 상태</button>
+          </div>
+          <div id="workspaceMeta" class="meta"></div>
+        </section>
 
-      <section class="card">
-        <h2>0.5) Qdrant 상태</h2>
-        <p class="hint">현재 연결된 Qdrant 컬렉션/포인트 수를 확인합니다.</p>
-        <div class="actions">
-          <button id="btnQdrantStatus">상태 새로고침</button>
-        </div>
-        <pre id="qdrantStatusBox" class="status-box"></pre>
-      </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Registration</h2>
+          </div>
+          <div class="stack-form">
+            <label>Quick Seed Pet Name<input id="uPetName" placeholder="초코" /></label>
+            <label>Quick Seed Image<input id="uFile" type="file" accept="image/*" /></label>
+            <button id="btnQuickUpload">빠른 등록</button>
+          </div>
+          <hr />
+          <div class="stack-form">
+            <label>Folder Seed Upload<input id="fFolder" type="file" webkitdirectory directory multiple /></label>
+            <button id="btnFolderUpload">폴더 일괄 등록</button>
+          </div>
+          <hr />
+          <div class="stack-form">
+            <label>Daily Upload (test)<input id="dFiles" type="file" accept="image/*" multiple /></label>
+            <button id="btnDailyUpload">Daily 업로드</button>
+          </div>
+        </section>
 
-      <section class="card">
-        <h2>1) Exemplar 검색/관리</h2>
-        <div class="grid">
-          <label>Daycare ID<input id="qDaycare" placeholder="dc_001" /></label>
-          <label>Pet ID<input id="qPet" placeholder="pet_choco" /></label>
-          <label>Species
-            <select id="qSpecies">
-              <option value="">(All)</option>
-              <option value="DOG">DOG</option>
-              <option value="CAT">CAT</option>
-            </select>
-          </label>
-          <label>Active
-            <select id="qActive">
-              <option value="true">true</option>
-              <option value="false">false</option>
-              <option value="">(Both)</option>
-            </select>
-          </label>
-          <label>Search<input id="qText" placeholder="instance/image/note" /></label>
-          <label>Limit<input id="qLimit" type="number" min="1" value="200" /></label>
-        </div>
-        <div class="actions">
-          <button id="btnSearch" class="primary">조회</button>
-          <button id="btnRefresh">새로고침</button>
-        </div>
-        <div id="searchMeta" class="meta"></div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>thumb</th>
-                <th>instance_id</th>
-                <th>pet_id</th>
-                <th>active</th>
-                <th>rank</th>
-                <th>note</th>
-                <th>image_id</th>
-                <th>updated_at</th>
-                <th>actions</th>
-              </tr>
-            </thead>
-            <tbody id="exemplarTbody"></tbody>
-          </table>
-        </div>
-      </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Daily Ops</h2>
+          </div>
+          <div class="grid two">
+            <label>Auto Accept<input id="autoAcceptThreshold" type="number" step="0.01" min="0" max="1" value="0.6" /></label>
+            <label>Select Mode
+              <select id="selectionMode">
+                <option value="BEST_CONFIDENCE">BEST_CONFIDENCE</option>
+                <option value="ALL">ALL</option>
+              </select>
+            </label>
+          </div>
+          <div class="inline-actions wrap">
+            <button id="btnAutoClassify" class="primary">자동 분류</button>
+            <button id="btnFinalize">버킷 확정</button>
+            <button id="btnReloadGallery">현재 갤러리 새로고침</button>
+          </div>
+          <div id="opsMeta" class="meta"></div>
+        </section>
 
-      <section class="card">
-        <h2>2) 빠른 등록 (이름 + 이미지)</h2>
-        <p class="hint">pet_name 고유 가정 시, 업로드 1회로 ingest + exemplar 등록을 동시에 수행합니다.</p>
-        <div class="grid">
-          <label>Daycare ID<input id="uDaycare" placeholder="dc_001" /></label>
-          <label>Pet Name<input id="uPetName" placeholder="초코" /></label>
-          <label>Updated By<input id="uBy" placeholder="admin01" /></label>
-          <label>Trainer ID<input id="uTrainer" placeholder="optional" /></label>
-          <label>Captured At (ISO8601)<input id="uCapturedAt" placeholder="2026-03-05T12:00:00Z" /></label>
-          <label>Image File<input id="uFile" type="file" accept="image/*" /></label>
-          <label class="checkbox"><input id="uSyncLabel" type="checkbox" checked /> sync label</label>
-          <label class="checkbox"><input id="uAllInstances" type="checkbox" /> apply to all instances</label>
-        </div>
-        <div class="actions">
-          <button id="btnQuickUpload" class="primary">빠른 등록 실행</button>
-        </div>
-      </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Daycare List</h2>
+          </div>
+          <ul id="daycareList" class="daycare-list"></ul>
+        </section>
 
-      <section class="card">
-        <h2>2.5) 폴더 일괄 등록 (pet 폴더 구조)</h2>
-        <p class="hint">예: <code>업로드루트/초코/*.jpg</code>, <code>업로드루트/엘/*.png</code></p>
-        <div class="grid">
-          <label>Daycare ID<input id="fDaycare" placeholder="dc_001" /></label>
-          <label>Updated By<input id="fBy" placeholder="admin01" /></label>
-          <label>Trainer ID<input id="fTrainer" placeholder="optional" /></label>
-          <label>Captured At (ISO8601)<input id="fCapturedAt" placeholder="optional" /></label>
-          <label>Folder Upload<input id="fFolder" type="file" webkitdirectory directory multiple /></label>
-          <label class="checkbox"><input id="fSyncLabel" type="checkbox" checked /> sync label</label>
-          <label class="checkbox"><input id="fAllInstances" type="checkbox" /> apply to all instances</label>
-          <label class="checkbox"><input id="fSkipOnError" type="checkbox" checked /> skip on error</label>
-        </div>
-        <div class="actions">
-          <button id="btnFolderUpload" class="primary">폴더 일괄 등록 실행</button>
-        </div>
-      </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Qdrant</h2>
+          </div>
+          <pre id="qdrantStatusBox" class="status-box"></pre>
+        </section>
 
-      <section class="card">
-        <h2>2.6) Daily 이미지 업로드 (테스트용)</h2>
-        <p class="hint">갤러리 업로드를 대체하는 테스트 기능입니다. 선택한 파일들을 DAILY로 ingest합니다.</p>
-        <div class="grid">
-          <label>Daycare ID<input id="dDaycare" placeholder="dc_001" /></label>
-          <label>Trainer ID<input id="dTrainer" placeholder="tester01" /></label>
-          <label>Captured At (ISO8601)<input id="dCapturedAt" placeholder="optional" /></label>
-          <label>Daily Files<input id="dFiles" type="file" accept="image/*" multiple /></label>
-        </div>
-        <div class="actions">
-          <button id="btnDailyUpload" class="primary">Daily 업로드 실행</button>
-        </div>
-      </section>
+        <section class="panel log-panel">
+          <div class="panel-head">
+            <h2>Log</h2>
+          </div>
+          <pre id="logBox"></pre>
+        </section>
+      </aside>
 
-      <section class="card">
-        <h2>3) 이미지 -> 인스턴스 탐색</h2>
-        <p class="hint">갤러리에서 인스턴스 ID를 찾아 바로 등록폼에 채울 수 있습니다.</p>
-        <div class="grid">
-          <label>Daycare ID<input id="imgDaycare" placeholder="dc_001" /></label>
-          <label>Date (UTC)<input id="imgDate" type="date" /></label>
-          <label>Image Type
-            <select id="imgRole">
-              <option value="ALL" selected>ALL (Daily + Seed)</option>
-              <option value="DAILY">DAILY only</option>
-              <option value="SEED">SEED only</option>
-            </select>
-          </label>
-          <label>Limit<input id="imgLimit" type="number" value="50" min="1" max="500" /></label>
-        </div>
-        <div class="actions">
-          <button id="btnLoadImages">이미지 조회</button>
-        </div>
-        <div class="list-wrap">
-          <ul id="imageList"></ul>
-          <div id="imageMetaBox"></div>
-        </div>
-      </section>
+      <section class="stage">
+        <section class="panel accent-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow small-eyebrow">Seed Registry</p>
+              <h2>Pet Buttons</h2>
+            </div>
+            <div id="petMeta" class="meta"></div>
+          </div>
+          <div id="petButtons" class="pet-buttons"></div>
+          <div id="activePetStrip" class="seed-strip"></div>
+        </section>
 
-      <section class="card">
-        <h2>로그</h2>
-        <pre id="logBox"></pre>
+        <section class="panel work-panel">
+          <div class="work-header">
+            <div class="view-tabs">
+              <button id="btnViewAll" data-view="ALL" class="tab active">ALL daily</button>
+              <button id="btnViewUnclassified" data-view="UNCLASSIFIED" class="tab">UNCLASSIFIED</button>
+              <button id="btnViewPet" data-view="PET" class="tab">PET bucket</button>
+            </div>
+            <div class="search-controls">
+              <label>Top K<input id="similarTopK" type="number" min="1" max="500" value="80" /></label>
+              <button id="btnSimilarSearch">유사 정렬</button>
+              <button id="btnClearRanking">정렬 초기화</button>
+            </div>
+          </div>
+
+          <div class="selection-bar">
+            <div id="selectionMeta" class="selection-meta">선택된 이미지 0장</div>
+            <div class="inline-actions wrap">
+              <button id="btnSelectAll">전체 선택</button>
+              <button id="btnClearSelection">전체 해제</button>
+              <button id="btnAssignSelected" class="primary">현재 pet에 포함</button>
+              <button id="btnClearSelected">현재 pet에서 해제</button>
+              <button id="btnRejectSelected" class="danger">제외</button>
+            </div>
+          </div>
+
+          <div id="galleryMeta" class="gallery-meta"></div>
+          <div id="galleryGrid" class="gallery-grid"></div>
+        </section>
+
+        <section class="panel inspector-panel">
+          <div class="panel-head">
+            <h2>Inspector</h2>
+            <div id="detailMeta" class="meta"></div>
+          </div>
+          <div id="detailPane" class="detail-empty">이미지를 클릭하면 instance 상세가 표시됩니다.</div>
+        </section>
       </section>
     </main>
 
