@@ -500,6 +500,7 @@ Fields:
 - `facebankVersion` (required, int)
 - `score` (required, float)
 - `threshold` (optional, float)
+- `sharpness` (optional, float): client-computed frame sharpness
 - `isSuccess` (required, bool)
 - `userFeedback` (required, bool)
 - `timestamp` (optional, ISO8601)

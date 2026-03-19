@@ -11,7 +11,7 @@
       <div>
         <p class="eyebrow">PetID Operations Console</p>
         <h1>Seed-Driven Daily Classification</h1>
-        <p class="subtitle">초기 등록 이미지 관리, 반자동 분류 검수, 이미지 기반 정렬을 한 화면에서 처리합니다.</p>
+        <p class="subtitle">초기 등록/일자별 수집 이미지 관리, 반자동 분류 검수, 이미지 기반 정렬</p>
       </div>
       <label class="api-base">API Base<input id="apiBase" type="text" /></label>
     </header>
@@ -36,11 +36,22 @@
 
         <section class="panel">
           <div class="panel-head">
+            <h2>Daycare List</h2>
+          </div>
+          <ul id="daycareList" class="daycare-list"></ul>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
             <h2>Registration</h2>
           </div>
-          <div class="stack-form">
-            <label>Quick Seed Pet Name<input id="uPetName" placeholder="초코" /></label>
-            <label>Quick Seed Image<input id="uFile" type="file" accept="image/*" /></label>
+          <div class="stack-form grouped-form">
+            <div class="group-head">
+              <p class="eyebrow small-eyebrow">Single Seed</p>
+              <div class="meta">이름과 기준 이미지를 함께 넣고 바로 등록</div>
+            </div>
+            <label>Pet Name<input id="uPetName" placeholder="초코" /></label>
+            <label>Seed Image<input id="uFile" type="file" accept="image/*" /></label>
             <button id="btnQuickUpload">빠른 등록</button>
           </div>
           <hr />
@@ -69,18 +80,10 @@
             </label>
           </div>
           <div class="inline-actions wrap">
-            <button id="btnAutoClassify" class="primary">자동 분류</button>
             <button id="btnFinalize">버킷 확정</button>
             <button id="btnReloadGallery">현재 갤러리 새로고침</button>
           </div>
           <div id="opsMeta" class="meta"></div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-head">
-            <h2>Daycare List</h2>
-          </div>
-          <ul id="daycareList" class="daycare-list"></ul>
         </section>
 
         <section class="panel">
@@ -119,6 +122,7 @@
               <button id="btnViewPet" data-view="PET" class="tab">PET bucket</button>
             </div>
             <div class="search-controls">
+              <button id="btnAutoClassify" class="primary">자동 분류</button>
               <label>Top K<input id="similarTopK" type="number" min="1" max="500" value="80" /></label>
               <button id="btnSimilarSearch">유사 정렬</button>
               <button id="btnClearRanking">정렬 초기화</button>
@@ -131,8 +135,7 @@
               <button id="btnSelectAll">전체 선택</button>
               <button id="btnClearSelection">전체 해제</button>
               <button id="btnAssignSelected" class="primary">현재 pet에 포함</button>
-              <button id="btnClearSelected">현재 pet에서 해제</button>
-              <button id="btnRejectSelected" class="danger">제외</button>
+              <button id="btnClearSelected">미지정으로 되돌리기</button>
             </div>
           </div>
 

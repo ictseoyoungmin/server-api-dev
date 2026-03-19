@@ -143,6 +143,20 @@ class Settings(BaseSettings):
         le=1.0,
         description="Padding ratio added around YOLO bbox when cropping (helps include body).",
     )
+    min_bbox_area_ratio: float = Field(
+        default=0.008,
+        ge=0.0,
+        le=1.0,
+        description="Minimum normalized bbox area ratio required to keep a detection during ingest.",
+    )
+    apply_min_bbox_area_to_seed: bool = Field(
+        default=True,
+        description="Apply minimum bbox area filtering to SEED ingest detections.",
+    )
+    apply_min_bbox_area_to_daily: bool = Field(
+        default=True,
+        description="Apply minimum bbox area filtering to DAILY ingest detections.",
+    )
 
     # Vector DB (Qdrant)
     vector_db: Literal["qdrant"] = Field(

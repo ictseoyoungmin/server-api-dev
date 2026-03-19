@@ -729,17 +729,7 @@ function bindEvents() {
       await withButtonBusy(button, () => labelSelectedImages("CLEAR"));
     } catch (err) {
       alert(err.message);
-      log("Clear selected failed", { error: err.message });
-    }
-  });
-
-  el("btnRejectSelected").addEventListener("click", async () => {
-    const button = el("btnRejectSelected");
-    try {
-      await withButtonBusy(button, () => labelSelectedImages("REJECT"));
-    } catch (err) {
-      alert(err.message);
-      log("Reject selected failed", { error: err.message });
+      log("Reset to unassigned failed", { error: err.message });
     }
   });
 

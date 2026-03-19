@@ -238,6 +238,18 @@ h2 {
   gap: 10px;
 }
 
+.grouped-form {
+  padding: 14px;
+  border: 1px solid rgba(88, 72, 34, 0.12);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(247, 242, 232, 0.96), rgba(239, 233, 219, 0.82));
+}
+
+.group-head {
+  display: grid;
+  gap: 4px;
+}
+
 .meta,
 .gallery-meta,
 .selection-meta {

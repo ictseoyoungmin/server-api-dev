@@ -5,6 +5,7 @@
 - 기준 라우터: `app/api/v1/router.py`
 - API Prefix: `/v1`
 - 기본 문서 URL(런타임): `/docs` (FastAPI Swagger UI)
+- 데이터 필드/저장 구조 참조: `DATA_SCHEMA_REFERENCE.md`
 
 ## 공통 사항
 
@@ -26,25 +27,31 @@
 
 ### 앱별 엔드포인트 요약 (빠른 참조)
 
+현재 코드 기준 HTTP 엔드포인트 수:
+- 총 28개 (`GET /` 포함, `/admin` 정적 GUI 제외)
+
 | Endpoint | Face Verification 앱 | Semi-Auto Classification 앱 | 비고 |
 | :--- | :---: | :---: | :--- |
+| `GET /` | O | O | 루트 정보 / docs 진입점 안내 |
 | `GET /v1/health` | O | O | 서버 연결/상태 확인 |
 | `GET /v1/health/qdrant` | O | O | Qdrant 컬렉션/포인트/벡터 샘플 상태 |
 | `GET /v1/daycares` | - | O | daycare 목록/요약 조회 (관리자) |
 | `DELETE /v1/daycares/{daycare_id}` | - | O | daycare 단위 DB+스토리지 초기화 (관리자) |
-| `POST /v1/embed` | O | (선택) | Verification의 Remote embedding |
+| `POST /v1/embed` | O | - | Verification의 Remote embedding |
 | `POST /v1/embed/batch` | - | - | 운영 플로우보단 도구/테스트 성격 |
 | `POST /v1/ingest` | - | O | 이미지 인입 + 검출 + 임베딩 |
-| `POST /v1/search` | - | (간접/실험) | 기존 gallery 검색 API |
-| `POST /v1/labels` | (선택) O | O | 분류 앱 핵심. Verification은 서버 라벨 동기화 시에만 |
+| `POST /v1/search` | - | - | 기존 gallery 검색 API |
+| `POST /v1/labels` | - | O | 인스턴스 단위 라벨링 |
 | `GET /v1/exemplars` | - | O | 초기 등록 이미지(Exemplar) 조회/검색 |
 | `POST /v1/exemplars` | - | O | 초기 등록 이미지(Exemplar) 등록 |
+| `POST /v1/exemplars/upload` | - | O | 단일 seed 이미지 빠른 등록 |
+| `POST /v1/exemplars/upload-folder` | - | O | pet 폴더 기반 seed 일괄 등록 |
 | `PATCH /v1/exemplars/{instance_id}` | - | O | 초기 등록 이미지(Exemplar) 수정 |
 | `DELETE /v1/exemplars/{instance_id}` | - | O | 초기 등록 이미지(Exemplar) 해제 |
 | `GET /v1/images` | - | O | 갤러리 조회 |
 | `GET /v1/images/{image_id}` | - | O | 이미지 바이트 조회 |
-| `GET /v1/images/{image_id}/meta` | (선택) O | O | 분류 앱 핵심. Verification은 서버 라벨 동기화 시 선택 |
-| `GET /v1/pets` | (선택) O | O | Classification 핵심, Verification은 선택 |
+| `GET /v1/images/{image_id}/meta` | - | O | 이미지/instance 메타 조회 |
+| `GET /v1/pets` | - | O | daycare 기준 pet 목록/통계 |
 | `GET /v1/sync-images` | O | - | Facebank 해시 중복 체크 |
 | `POST /v1/sync-images` | O | - | Facebank 이미지 업로드 |
 | `POST /v1/trials` | O | - | 인증 시도/피드백 업로드 |
@@ -146,7 +153,7 @@ JSON 응답 예시:
 ```json
 {
   "model_version": "miewid",
-  "dim": 1024,
+  "dim": 2152,
   "embedding": [0.0123, -0.0456]
 }
 ```
@@ -180,7 +187,7 @@ JSON 응답 예시:
 ```json
 {
   "model_version": "miewid",
-  "dim": 1024,
+  "dim": 2152,
   "items": [
     { "filename": "a.jpg", "embedding": [0.01, -0.02] },
     { "filename": "b.jpg", "embedding": [0.03, -0.04] }
@@ -296,7 +303,7 @@ SEED 정책:
 {
   "query_debug": {
     "used_vectors": 1,
-    "merge": "RRF",
+    "merge": "MAX",
     "per_query_limit": 400,
     "top_k_images": 200
   },
@@ -595,6 +602,7 @@ Query Parameters:
 비고:
 - `instance_id` 대신 `image_id` 배열을 받아 대표 instance를 서버가 선택합니다.
 - `action=ACCEPT | CLEAR | REJECT`를 지원합니다.
+- 현재 관리자 Dashboard UI는 주로 `ACCEPT`, `CLEAR`를 노출합니다. (`REJECT`는 백엔드 지원만 유지)
 - `select_mode=BEST_CONFIDENCE | ALL` 를 지원합니다.
 - seed 이미지는 대상에서 제외하고, Qdrant payload와 local meta sidecar를 함께 갱신합니다.
 
@@ -737,6 +745,7 @@ Form Fields:
 - `facebankVersion` (required, int)
 - `score` (required, float)
 - `threshold` (optional, float)
+- `sharpness` (optional, float): 클라이언트 프레임 선명도 지표
 - `isSuccess` (required, bool)
 - `userFeedback` (required, bool)
 - `timestamp` (optional, string): ISO8601 (`Z` 허용)
@@ -749,7 +758,7 @@ Form Fields:
   "trial_id": "01be0cd7-226e-4b96-8aac-7fc93e91371f",
   "status": "stored",
   "stored": true,
-  "storage_path": "data/pets/{petId}/{petName}/trials/2026-02-06/01be0cd7-....json",
+  "storage_path": "data/verification/pets/{petId}/{petName}/trials/2026-02-06/01be0cd7-....json",
   "outcome": "TP"
 }
 ```
@@ -760,7 +769,7 @@ Form Fields:
   "trial_id": "01be0cd7-226e-4b96-8aac-7fc93e91371f",
   "status": "duplicate",
   "stored": false,
-  "storage_path": "data/pets/{petId}/{petName}/trials/2026-02-06/01be0cd7-....json",
+  "storage_path": "data/verification/pets/{petId}/{petName}/trials/2026-02-06/01be0cd7-....json",
   "outcome": null
 }
 ```
@@ -792,7 +801,8 @@ Form Fields:
 - Semi-Auto Classification 앱 (핵심)
 
 비고:
-- 동작 전제: Qdrant에 `is_seed=true`, `seed_pet_id`가 설정된 exemplar 인스턴스가 존재해야 합니다.
+- 동작 전제: Qdrant에 `is_seed=true` 및 `seed_pet_id`가 설정된 exemplar 인스턴스가 존재해야 합니다.
+- 비교 풀은 같은 daycare(+optional species)의 exemplar(초기 등록 이미지) 인스턴스입니다.
 - facebank 동기화 데이터는 직접 사용하지 않습니다.
 
 - Content-Type: `application/json`
@@ -871,7 +881,7 @@ Form Fields:
 - `tab` (`ALL | UNCLASSIFIED | PET`)
 - `pet_id` (optional, `tab=PET`일 때 주로 사용)
 - `query_instance_ids` (string[], min 1)
-- `merge` (`MAX | RRF`, default `RRF`)
+- `merge` (`MAX | RRF`, default `MAX`)
 - `top_k_images` (int)
 - `per_query_limit` (int)
 
@@ -883,7 +893,7 @@ Form Fields:
   "tab": "UNCLASSIFIED",
   "pet_id": null,
   "query_instance_ids": ["ins_aaa", "ins_bbb"],
-  "merge": "RRF",
+  "merge": "MAX",
   "top_k_images": 200,
   "per_query_limit": 400
 }
@@ -904,7 +914,7 @@ Form Fields:
   "pet_id": null,
   "query_debug": {
     "used_vectors": 2,
-    "merge": "RRF",
+    "merge": "MAX",
     "per_query_limit": 400,
     "top_k_images": 200,
     "allowed_images": 128

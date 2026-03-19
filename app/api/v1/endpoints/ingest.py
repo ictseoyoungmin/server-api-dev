@@ -50,6 +50,25 @@ def _safe_folder_name(name: Optional[str]) -> str:
     return safe or "unknown"
 
 
+def _bbox_area_ratio(det) -> float:
+    return max(0.0, float(det.x2) - float(det.x1)) * max(0.0, float(det.y2) - float(det.y1))
+
+
+def _should_apply_min_bbox_area(image_role: str) -> bool:
+    if image_role == "SEED":
+        return bool(settings.apply_min_bbox_area_to_seed)
+    return bool(settings.apply_min_bbox_area_to_daily)
+
+
+def _filter_small_detections(detections, image_role: str):
+    if not _should_apply_min_bbox_area(image_role):
+        return detections
+    min_area = float(settings.min_bbox_area_ratio)
+    if min_area <= 0.0:
+        return detections
+    return [d for d in detections if _bbox_area_ratio(d) >= min_area]
+
+
 def _get_embedder(request: Request):
     embedders = getattr(request.app.state, "embedders", None)
     if isinstance(embedders, dict):
@@ -152,6 +171,9 @@ async def ingest(
         detections = [
             type("_D", (), {"class_id": 16, "confidence": 1.0, "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 1.0})
         ]
+
+    # Optional minimum area filter for tiny detections.
+    detections = _filter_small_detections(detections, image_role=image_role)
 
     # Seed policy: one exemplar instance per image.
     # Keep only the highest-confidence detection for SEED images.
