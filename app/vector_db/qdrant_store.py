@@ -164,6 +164,16 @@ class QdrantStore:
             points=ids,
         )
 
+    def delete_points(self, instance_ids: Iterable[str], wait: bool = True) -> None:
+        ids = self.normalize_instance_ids(instance_ids)
+        if not ids:
+            return
+        self.client.delete(
+            collection_name=self.collection,
+            points_selector=qm.PointIdsList(points=ids),
+            wait=wait,
+        )
+
     def search(
         self,
         vector: List[float],

@@ -1,5 +1,7 @@
 const el = (id) => document.getElementById(id);
 
+let inspectorResizeObserver = null;
+
 const state = {
   daycares: [],
   pets: [],
@@ -195,6 +197,108 @@ function inferCardState(item) {
   return "unreviewed";
 }
 
+function inferInstanceState(inst) {
+  const status = String(inst.assignment_status || "").toUpperCase();
+  if (status === "ACCEPTED") return "accepted";
+  if (status === "REJECTED") return "rejected";
+  return "unreviewed";
+}
+
+function displayInstancePet(inst) {
+  if (inst.pet_id) return String(inst.pet_id);
+  if (inst.auto_pet_id) return `${inst.auto_pet_id} (candidate)`;
+  return "미지정";
+}
+
+function petOptionsMarkup(selectedPetId = "") {
+  const selected = String(selectedPetId || "");
+  const options = ['<option value="">펫 선택</option>'];
+  state.pets.forEach((pet) => {
+    const value = String(pet.pet_id || "");
+    const label = String(pet.pet_name || pet.pet_id || "");
+    options.push(`<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`);
+  });
+  return options.join("");
+}
+
+function clamp01(v) {
+  return Math.max(0, Math.min(1, Number(v || 0)));
+}
+
+function getContainedImageRect(img) {
+  const boxWidth = img.clientWidth || 0;
+  const boxHeight = img.clientHeight || 0;
+  const naturalWidth = img.naturalWidth || boxWidth;
+  const naturalHeight = img.naturalHeight || boxHeight;
+  if (!boxWidth || !boxHeight || !naturalWidth || !naturalHeight) {
+    return { left: 0, top: 0, width: boxWidth, height: boxHeight };
+  }
+  const scale = Math.min(boxWidth / naturalWidth, boxHeight / naturalHeight);
+  const width = naturalWidth * scale;
+  const height = naturalHeight * scale;
+  return {
+    left: (boxWidth - width) / 2,
+    top: (boxHeight - height) / 2,
+    width,
+    height,
+  };
+}
+
+function positionOverlayBox(box, bbox, imageRect) {
+  const x1 = clamp01(bbox.x1);
+  const y1 = clamp01(bbox.y1);
+  const x2 = clamp01(bbox.x2);
+  const y2 = clamp01(bbox.y2);
+  const left = imageRect.left + imageRect.width * x1;
+  const top = imageRect.top + imageRect.height * y1;
+  const width = Math.max(0, imageRect.width * (x2 - x1));
+  const height = Math.max(0, imageRect.height * (y2 - y1));
+  box.style.left = `${left}px`;
+  box.style.top = `${top}px`;
+  box.style.width = `${width}px`;
+  box.style.height = `${height}px`;
+}
+
+function layoutInspectorOverlays(preview, img, overlay, instances) {
+  if (!preview || !img || !overlay) return;
+  const imageRect = getContainedImageRect(img);
+  overlay.style.left = '0';
+  overlay.style.top = '0';
+  overlay.style.width = `${preview.clientWidth}px`;
+  overlay.style.height = `${preview.clientHeight}px`;
+  overlay.querySelectorAll('.bbox-overlay').forEach((box, idx) => {
+    positionOverlayBox(box, instances[idx]?.bbox || {}, imageRect);
+  });
+}
+
+function bindInspectorRelayout(preview, img, overlay, instances) {
+  if (inspectorResizeObserver) {
+    inspectorResizeObserver.disconnect();
+    inspectorResizeObserver = null;
+  }
+  const relayout = () => layoutInspectorOverlays(preview, img, overlay, instances);
+  if (img) {
+    if (img.complete) relayout();
+    else img.addEventListener('load', relayout, { once: true });
+  }
+  if (preview && typeof ResizeObserver !== 'undefined') {
+    inspectorResizeObserver = new ResizeObserver(() => relayout());
+    inspectorResizeObserver.observe(preview);
+    if (img) inspectorResizeObserver.observe(img);
+  }
+  return relayout;
+}
+
+function setActiveInspectorInstance(pane, instanceId) {
+  if (!pane) return;
+  pane.querySelectorAll(".bbox-overlay").forEach((node) => {
+    node.classList.toggle("active", node.dataset.instanceId === instanceId);
+  });
+  pane.querySelectorAll(".instance-row").forEach((node) => {
+    node.classList.toggle("active", node.dataset.instanceId === instanceId);
+  });
+}
+
 function renderGallery() {
   const grid = el("galleryGrid");
   const meta = el("galleryMeta");
@@ -252,6 +356,10 @@ function renderGallery() {
 function renderInspector(meta) {
   const pane = el("detailPane");
   const detailMeta = el("detailMeta");
+  if (inspectorResizeObserver) {
+    inspectorResizeObserver.disconnect();
+    inspectorResizeObserver = null;
+  }
   if (!meta) {
     pane.className = "detail-empty";
     pane.textContent = "이미지를 클릭하면 instance 상세가 표시됩니다.";
@@ -261,9 +369,13 @@ function renderInspector(meta) {
   detailMeta.textContent = meta.image?.image_id || "";
   pane.className = "detail-body";
   const petLabel = Array.isArray(meta.image?.pet_ids) && meta.image.pet_ids.length > 0 ? meta.image.pet_ids.join(", ") : "미지정";
+  const instances = Array.isArray(meta.instances) ? meta.instances : [];
   pane.innerHTML = `
     <div class="detail-hero">
-      <img src="${meta.image?.thumb_url || ""}" alt="${meta.image?.image_id || "detail"}" loading="lazy" />
+      <div class="detail-preview" title="클릭하여 확대/축소">
+        <img class="detail-preview-image" src="${meta.image?.raw_url || meta.image?.thumb_url || ""}" alt="${meta.image?.image_id || "detail"}" loading="lazy" />
+        <div class="detail-overlay-layer"></div>
+      </div>
       <div>
         <div class="pet-label">${petLabel}</div>
         <div class="pet-sub"><code>${meta.image?.image_id || ""}</code></div>
@@ -272,26 +384,102 @@ function renderInspector(meta) {
     </div>
     <div class="instance-list"></div>
   `;
+  const preview = pane.querySelector(".detail-preview");
+  const img = pane.querySelector(".detail-preview-image");
+  const overlay = pane.querySelector(".detail-overlay-layer");
   const list = pane.querySelector(".instance-list");
-  (meta.instances || []).forEach((inst) => {
+  const relayout = bindInspectorRelayout(preview, img, overlay, instances);
+  preview?.addEventListener("click", (event) => {
+    if (event.target.closest(".bbox-overlay")) return;
+    preview.classList.toggle("expanded");
+    relayout();
+  });
+  instances.forEach((inst, idx) => {
+    const stateClass = inferInstanceState(inst);
+    const bbox = inst.bbox || {};
+    const label = displayInstancePet(inst);
+    const number = idx + 1;
+    const box = document.createElement("button");
+    box.type = "button";
+    box.className = `bbox-overlay ${stateClass}`;
+    box.dataset.instanceId = inst.instance_id;
+    box.innerHTML = `<span class="bbox-chip">#${number} ${label}</span>`;
+    box.addEventListener("mouseenter", () => setActiveInspectorInstance(pane, inst.instance_id));
+    box.addEventListener("focus", () => setActiveInspectorInstance(pane, inst.instance_id));
+    box.addEventListener("click", () => setActiveInspectorInstance(pane, inst.instance_id));
+    overlay.appendChild(box);
+
+    const preferredPetId = String(inst.pet_id || state.activePetId || "");
     const row = document.createElement("div");
-    row.className = "instance-row";
+    row.className = `instance-row ${stateClass}`;
+    row.dataset.instanceId = inst.instance_id;
     row.innerHTML = `
-      <div>
-        <div><code>${inst.instance_id}</code></div>
-        <div class="sub">species=${inst.species} · conf=${Number(inst.confidence || 0).toFixed(3)}</div>
-        <div class="sub">pet_id=${inst.pet_id || ""}</div>
+      <div class="instance-main">
+        <div class="instance-title-line">
+          <span class="instance-chip ${stateClass}">#${number}</span>
+          <strong>${label}</strong>
+        </div>
+        <div class="sub">${inst.species} · conf=${Number(inst.confidence || 0).toFixed(3)}</div>
+        <div class="sub"><code>${inst.instance_id}</code></div>
       </div>
-      <button data-copy="${inst.instance_id}">instance_id 복사</button>
+      <div class="instance-actions">
+        <label class="instance-select-wrap">
+          <span>펫 지정</span>
+          <select data-instance-pet="${inst.instance_id}">${petOptionsMarkup(preferredPetId)}</select>
+        </label>
+        <div class="instance-action-buttons">
+          <button class="primary" data-instance-assign="${inst.instance_id}">선택한 펫으로 지정</button>
+          <button data-instance-clear="${inst.instance_id}">미지정으로 변경</button>
+          <button class="danger" data-instance-remove="${inst.instance_id}">검출 제외</button>
+        </div>
+      </div>
     `;
+    row.addEventListener("mouseenter", () => setActiveInspectorInstance(pane, inst.instance_id));
+    row.addEventListener("click", (event) => {
+      if (event.target.closest("button, select, label")) return;
+      setActiveInspectorInstance(pane, inst.instance_id);
+    });
     list.appendChild(row);
   });
-  pane.querySelectorAll("[data-copy]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      await navigator.clipboard.writeText(btn.dataset.copy);
-      log("Copied instance_id", { instance_id: btn.dataset.copy });
+  pane.querySelectorAll("[data-instance-assign]").forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      try {
+        const instanceId = btn.dataset.instanceAssign;
+        const select = pane.querySelector(`[data-instance-pet="${instanceId}"]`);
+        const petId = select ? String(select.value || "").trim() : "";
+        if (!petId) throw new Error("지정할 펫을 선택하세요.");
+        await withButtonBusy(btn, () => applyInstanceLabel(instanceId, "ACCEPT", petId));
+      } catch (err) {
+        alert(err.message || String(err));
+      }
     });
   });
+  pane.querySelectorAll("[data-instance-clear]").forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      try {
+        await withButtonBusy(btn, () => applyInstanceLabel(btn.dataset.instanceClear, "CLEAR"));
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+    });
+  });
+  pane.querySelectorAll("[data-instance-remove]").forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      try {
+        if (!confirm("이 검출 instance를 제거할까요? 원본 이미지는 유지됩니다.")) return;
+        await withButtonBusy(btn, () => removeInspectorInstance(btn.dataset.instanceRemove));
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+    });
+  });
+  relayout();
+  if (instances.length > 0) {
+    setActiveInspectorInstance(pane, instances[0].instance_id);
+  }
 }
 
 function syncViewButtons() {
@@ -352,11 +540,16 @@ async function loadPets() {
   if (state.activePetId && !state.pets.find((item) => item.pet_id === state.activePetId)) {
     state.activePetId = null;
   }
+  if (!state.activePetId && state.pets.length > 0) {
+    state.activePetId = state.pets[0].pet_id;
+  }
   renderPetButtons();
   if (!state.activePetId) {
     state.activeExemplars = [];
     renderActiveExemplars();
+    return;
   }
+  await loadActiveExemplars();
 }
 
 async function loadActiveExemplars() {
@@ -405,6 +598,44 @@ async function inspectImage(imageId) {
     state.imageMetaCache.set(imageId, meta);
   }
   renderInspector(meta);
+}
+
+async function refreshInspectorImage() {
+  if (!state.inspectedImageId) return;
+  state.imageMetaCache.delete(state.inspectedImageId);
+  try {
+    await inspectImage(state.inspectedImageId);
+  } catch (_err) {
+    renderInspector(null);
+  }
+}
+
+async function applyInstanceLabel(instanceId, action, petId = null) {
+  const daycare = currentDaycare();
+  if (!daycare) throw new Error("daycare_id를 입력하세요.");
+  const assignments = [{
+    instance_id: instanceId,
+    action,
+    pet_id: action === "ACCEPT" ? String(petId || "") : null,
+    source: "MANUAL",
+    confidence: 1.0,
+  }];
+  await api("/labels", {
+    method: "POST",
+    body: JSON.stringify({
+      daycare_id: daycare,
+      labeled_by: "admin_dashboard",
+      assignments,
+    }),
+  });
+  await loadGallery();
+  await refreshInspectorImage();
+}
+
+async function removeInspectorInstance(instanceId) {
+  await api(`/admin/instances/${encodeURIComponent(instanceId)}`, { method: "DELETE" });
+  await loadGallery();
+  await refreshInspectorImage();
 }
 
 async function loadWorkspace() {
@@ -606,8 +837,11 @@ function bindViewButtons() {
     el(id).addEventListener("click", async () => {
       const nextView = el(id).dataset.view;
       if (nextView === "PET" && !state.activePetId) {
-        alert("먼저 pet 버튼을 선택하세요.");
-        return;
+        await loadPets();
+        if (!state.activePetId) {
+          alert("등록된 pet이 없습니다.");
+          return;
+        }
       }
       state.galleryView = nextView;
       resetSearchRanking();

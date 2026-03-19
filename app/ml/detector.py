@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 import numpy as np
+import torch
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ class YoloDetector:
         task: str = "detect",
     ):
         self.weights_path = Path(weights_path)
-        self.device = device
+        self.device = self._resolve_device(device)
         self.imgsz = int(imgsz)
         self.conf = float(conf)
         self.iou = float(iou)
@@ -61,6 +62,16 @@ class YoloDetector:
 
         logger.info("Loading YOLO detector | weights=%s | device=%s", self.weights_path, self.device)
         self.model = YOLO(str(self.weights_path), task=self.task)
+
+    @staticmethod
+    def _resolve_device(device_str: str) -> str:
+        ds = str(device_str).strip().lower()
+        if ds.startswith("cuda"):
+            if torch.cuda.is_available():
+                return device_str
+            logger.warning("CUDA requested for detector but not available. Falling back to CPU.")
+            return "cpu"
+        return device_str
 
     def detect(self, image: Image.Image) -> List[DetectedInstance]:
         if image.mode != "RGB":

@@ -97,6 +97,34 @@ def _sync_meta_sidecars(assignments: Dict[str, dict]) -> None:
             meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
 
+def _remove_instance_from_meta_sidecars(instance_id: str) -> dict:
+    meta_dir = Path(settings.reid_storage_dir) / "meta"
+    if not meta_dir.exists():
+        return {}
+
+    for meta_path in meta_dir.glob("img_*.json"):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        instances = list(meta.get("instances") or [])
+        kept = [inst for inst in instances if str(inst.get("instance_id") or "") != instance_id]
+        if len(kept) == len(instances):
+            continue
+
+        image = meta.get("image") or {}
+        meta["instances"] = kept
+        image["instance_count"] = len(kept)
+        meta["image"] = image
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        return {
+            "image_id": str(image.get("image_id") or ""),
+            "remaining_instances": len(kept),
+        }
+    return {}
+
+
 def _is_seed_point(payload: dict) -> bool:
     if bool(payload.get("is_seed", False)):
         return True
@@ -224,3 +252,23 @@ async def label_images(request: Request, body: AdminImageLabelRequest):
         labeled_at=now,
         items=items,
     )
+
+
+@router.delete("/admin/instances/{instance_id}")
+async def delete_instance(request: Request, instance_id: str):
+    store = _get_store(request)
+    points = await run_in_threadpool(store.retrieve_points, [instance_id], False)
+    key = store.external_instance_id(instance_id)
+    point = points.get(key)
+    if point is None:
+        raise HTTPException(status_code=404, detail="instance not found")
+
+    image_id = str(point.payload.get("image_id") or "")
+    await run_in_threadpool(store.delete_points, [instance_id])
+    sidecar_info = await run_in_threadpool(_remove_instance_from_meta_sidecars, key)
+    return {
+        "status": "deleted",
+        "instance_id": key,
+        "image_id": sidecar_info.get("image_id") or image_id,
+        "remaining_instances": int(sidecar_info.get("remaining_instances") or 0),
+    }
