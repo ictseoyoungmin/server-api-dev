@@ -27,6 +27,10 @@ venv/
 /models_cache/
 /snapshots/
 
+/*/*/*ref
+data/
+head_pose_analyze/
+
 # Runtime markers
 .qdrant-initialized
 
