@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
-from zoneinfo import ZoneInfo
+from app.utils.timezone import business_tz
 
 from fastapi import APIRouter, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
@@ -33,7 +33,7 @@ def _to_ts(dt: Optional[datetime]) -> Optional[int]:
     if dt is None:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=ZoneInfo(settings.business_tz))
+        dt = dt.replace(tzinfo=business_tz())
     return int(dt.timestamp())
 
 

@@ -7,7 +7,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-from zoneinfo import ZoneInfo
+from app.utils.timezone import business_tz
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from starlette.concurrency import run_in_threadpool
@@ -28,7 +28,7 @@ def _parse_timestamp(ts: Optional[str]) -> datetime:
     try:
         parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=ZoneInfo(settings.business_tz))
+            parsed = parsed.replace(tzinfo=business_tz())
         return parsed
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid timestamp: {ts}") from e

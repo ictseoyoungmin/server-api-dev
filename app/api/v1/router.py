@@ -9,6 +9,7 @@ from app.api.v1.endpoints import (
     embedding,
     exemplars,
     health,
+    identify,
     images,
     ingest,
     labels,
@@ -25,6 +26,7 @@ router.include_router(admin.router, tags=["admin"])
 router.include_router(daycares.router, tags=["daycares"])
 router.include_router(embedding.router, tags=["embedding"])
 router.include_router(ingest.router, tags=["ingest"])
+router.include_router(identify.router, tags=["identify"])
 router.include_router(images.router, tags=["images"])
 router.include_router(pets.router, tags=["pets"])
 router.include_router(search.router, tags=["search"])

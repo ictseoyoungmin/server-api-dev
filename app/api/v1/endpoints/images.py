@@ -8,7 +8,7 @@ from datetime import date as date_type
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
-from zoneinfo import ZoneInfo
+from app.utils.timezone import business_tz
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
@@ -117,7 +117,7 @@ def _is_seed_image(meta: dict) -> bool:
 
 
 def _day_range_ts(day: date_type) -> tuple[int, int]:
-    tz = ZoneInfo(settings.business_tz)
+    tz = business_tz()
     start_local = datetime.combine(day, time.min, tzinfo=tz)
     end_local = start_local + timedelta(days=1)
     start_utc = start_local.astimezone(timezone.utc)

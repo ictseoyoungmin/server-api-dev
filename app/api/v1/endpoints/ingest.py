@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
-from zoneinfo import ZoneInfo
+from app.utils.timezone import business_tz
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
@@ -122,7 +122,7 @@ async def ingest(
             parsed = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
             if parsed.tzinfo is None:
                 # If client omits timezone, treat it as business timezone (default KST).
-                parsed = parsed.replace(tzinfo=ZoneInfo(settings.business_tz))
+                parsed = parsed.replace(tzinfo=business_tz())
             cap_dt = parsed
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid captured_at: {captured_at}") from e

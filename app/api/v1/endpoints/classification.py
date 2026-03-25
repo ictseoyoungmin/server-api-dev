@@ -6,7 +6,7 @@ import json
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Set, Tuple
-from zoneinfo import ZoneInfo
+from app.utils.timezone import business_tz
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from starlette.concurrency import run_in_threadpool
@@ -39,7 +39,7 @@ def _get_store(request: Request) -> QdrantStore:
 
 
 def _day_range_ts(day: date) -> Tuple[int, int]:
-    tz = ZoneInfo(settings.business_tz)
+    tz = business_tz()
     start_local = datetime.combine(day, time.min, tzinfo=tz)
     end_local = start_local + timedelta(days=1)
     start_utc = start_local.astimezone(timezone.utc)
@@ -79,7 +79,7 @@ def _meta_day_business(meta: dict) -> str:
     img = meta.get("image") or {}
     ts = img.get("captured_at_ts") or img.get("uploaded_at_ts")
     try:
-        tz = ZoneInfo(settings.business_tz)
+        tz = business_tz()
         return datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(tz).date().isoformat()
     except Exception:
         return ""

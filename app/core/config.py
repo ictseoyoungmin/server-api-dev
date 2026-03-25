@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/v1"
     log_level: str = "INFO"
     log_tz: str = Field(
-        default="KST",
+        default="Asia/Seoul",
         description="Timezone label for app log formatter. Example: UTC, Asia/Seoul, KST",
     )
     log_tz_offset: Optional[str] = Field(
@@ -32,7 +32,7 @@ class Settings(BaseSettings):
         description="Explicit log timezone offset. Example: +09:00, -05:30",
     )
     business_tz: str = Field(
-        default="Asia/Seoul",
+        default="Asia/Seoul", # Asia/Seoul
         description="Business timezone for date-based filters and naive captured_at parsing.",
     )
 
