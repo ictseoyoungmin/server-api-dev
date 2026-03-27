@@ -14,6 +14,8 @@ const state = {
   inspectedImageId: null,
   searchScores: {},
   activeExemplars: [],
+  lastBucketManifest: null,
+  bucketSummary: null,
 };
 
 function nowIso() {
@@ -45,6 +47,29 @@ function apiBase() {
   return value("apiBase").trim().replace(/\/$/, "");
 }
 
+function bucketZipHref() {
+  const daycare = currentDaycare();
+  const date = currentDate();
+  if (!daycare || !date) return "";
+  const manifest = state.lastBucketManifest || null;
+  return `${apiBase()}/buckets/${encodeURIComponent(daycare)}/${encodeURIComponent(date)}/zip${toQuery({ manifest })}`;
+}
+
+function resetBucketExportState() {
+  state.lastBucketManifest = null;
+  state.bucketSummary = null;
+  renderBucketSummary();
+}
+
+window.handleDownloadZip = function handleDownloadZip() {
+  const href = bucketZipHref();
+  if (!href || !state.lastBucketManifest) {
+    alert("먼저 버킷 확정을 완료하세요.");
+    return;
+  }
+  window.open(href, "_blank", "noopener,noreferrer");
+};
+
 async function api(path, init = {}) {
   const headers = { ...(init.headers || {}) };
   if (!(init.body instanceof FormData) && !headers["Content-Type"]) {
@@ -71,6 +96,7 @@ function toQuery(params) {
 
 function setWorkspaceDaycare(daycareId) {
   el("workspaceDaycare").value = daycareId;
+  resetBucketExportState();
   log("Applied daycare", { daycare_id: daycareId });
 }
 
@@ -482,6 +508,148 @@ function renderInspector(meta) {
   }
 }
 
+
+function formatCount(value) {
+  return Number(value || 0).toLocaleString("ko-KR");
+}
+
+function formatRatio(value) {
+  return `${(Number(value || 0) * 100).toFixed(1)}%`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function renderBucketSummary() {
+  const pane = el("bucketSummaryPane");
+  const meta = el("bucketSummaryMeta");
+  if (!pane || !meta) return;
+
+  const summary = state.bucketSummary;
+  if (!summary) {
+    meta.textContent = "";
+    pane.className = "bucket-summary-empty";
+    pane.textContent = "버킷 확정 후 통계가 표시됩니다.";
+    return;
+  }
+
+  const quality = summary.quality_metrics || {};
+  const buckets = Array.isArray(summary.buckets) ? [...summary.buckets] : [];
+  const sortedBuckets = buckets.sort((a, b) => Number(b.count || 0) - Number(a.count || 0));
+  const maxBucketCount = sortedBuckets.reduce((acc, item) => Math.max(acc, Number(item.count || 0)), 0) || 1;
+  const totalInstances = Number(quality.total_instances || 0);
+  const acceptedInstances = Number(quality.accepted_instances || 0);
+  const unreviewedInstances = Number(quality.unreviewed_instances || 0);
+  const rejectedInstances = Number(quality.rejected_instances || 0);
+  const statusItems = [
+    { label: "확정", className: "accepted", count: acceptedInstances },
+    { label: "미분류", className: "unreviewed", count: unreviewedInstances },
+    { label: "제외", className: "rejected", count: rejectedInstances },
+  ];
+  const cards = [
+    { label: "버킷 수", value: formatCount(summary.bucket_count) },
+    { label: "총 이미지 수", value: formatCount(summary.total_images) },
+    { label: "총 인스턴스 수", value: formatCount(totalInstances) },
+    { label: "미분류 인스턴스", value: formatCount(unreviewedInstances) },
+    { label: "자동 확정 수", value: formatCount(quality.accepted_auto_instances) },
+  ];
+
+  meta.textContent = `${summary.daycare_id || ""}${summary.date ? ` · ${summary.date}` : ""}${summary.finalized_at ? ` · finalized ${summary.finalized_at}` : ""}`;
+  pane.className = "bucket-summary-body";
+  pane.innerHTML = `
+    <div class="bucket-kpi-grid">
+      ${cards.map((card) => `
+        <article class="bucket-kpi-card">
+          <div class="bucket-kpi-label">${escapeHtml(card.label)}</div>
+          <div class="bucket-kpi-value">${escapeHtml(card.value)}</div>
+        </article>
+      `).join("")}
+    </div>
+
+    <div class="bucket-summary-grid">
+      <section class="bucket-block">
+        <div class="bucket-block-head">
+          <h3>인스턴스 상태</h3>
+          <span>${formatCount(totalInstances)}개</span>
+        </div>
+        <div class="bucket-status-bar">
+          ${statusItems.map((item) => {
+            const width = totalInstances > 0 ? (item.count / totalInstances) * 100 : 0;
+            return `<span class="bucket-status-segment ${item.className}" style="width:${width.toFixed(2)}%"></span>`;
+          }).join("")}
+        </div>
+        <div class="bucket-status-legend">
+          ${statusItems.map((item) => `
+            <div class="bucket-status-item">
+              <span class="bucket-status-dot ${item.className}"></span>
+              <strong>${escapeHtml(item.label)}</strong>
+              <span>${formatCount(item.count)} · ${formatRatio(totalInstances > 0 ? item.count / totalInstances : 0)}</span>
+            </div>
+          `).join("")}
+        </div>
+      </section>
+
+      <section class="bucket-block">
+        <div class="bucket-block-head">
+          <h3>버킷별 이미지 수</h3>
+          <span>${formatCount(summary.bucket_count)} buckets</span>
+        </div>
+        ${sortedBuckets.length ? `
+          <div class="bucket-bars">
+            ${sortedBuckets.map((bucket) => {
+              const label = String(bucket.pet_name || bucket.pet_id || "미지정");
+              const count = Number(bucket.count || 0);
+              const width = (count / maxBucketCount) * 100;
+              return `
+                <div class="bucket-bar-row">
+                  <div class="bucket-bar-label" title="${escapeHtml(label)}">${escapeHtml(label)}</div>
+                  <div class="bucket-bar-track"><span class="bucket-bar-fill" style="width:${width.toFixed(2)}%"></span></div>
+                  <div class="bucket-bar-value">${formatCount(count)}</div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        ` : '<div class="empty-state">확정된 버킷이 아직 없습니다.</div>'}
+      </section>
+    </div>
+
+    <section class="bucket-block bucket-table-block">
+      <div class="bucket-block-head">
+        <h3>버킷 상세</h3>
+      </div>
+      ${sortedBuckets.length ? `
+        <div class="bucket-table-wrap compact">
+          <table class="bucket-table compact">
+            <thead>
+              <tr>
+                <th>버킷</th>
+                <th>이미지 수</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sortedBuckets.map((bucket) => {
+                const label = String(bucket.pet_name || bucket.pet_id || "미지정");
+                return `
+                  <tr>
+                    <td>${escapeHtml(label)}</td>
+                    <td>${formatCount(bucket.count)}</td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+      ` : '<div class="empty-state">버킷 상세를 표시할 항목이 없습니다.</div>'}
+    </section>
+  `;
+}
+
 function syncViewButtons() {
   ["btnViewAll", "btnViewUnclassified", "btnViewPet"].forEach((id) => {
     const button = el(id);
@@ -638,12 +806,31 @@ async function removeInspectorInstance(instanceId) {
   await refreshInspectorImage();
 }
 
+async function loadBucketSummary() {
+  const daycare = currentDaycare();
+  const date = currentDate();
+  if (!daycare || !date) {
+    state.bucketSummary = null;
+    renderBucketSummary();
+    return;
+  }
+  try {
+    const data = await api(`/buckets/${encodeURIComponent(daycare)}/${encodeURIComponent(date)}`);
+    state.bucketSummary = data;
+    state.lastBucketManifest = (String(data.manifest_path || "").split("/").pop() || "").trim() || null;
+  } catch (_err) {
+    state.bucketSummary = null;
+    state.lastBucketManifest = null;
+  }
+  renderBucketSummary();
+}
+
 async function loadWorkspace() {
   const daycare = currentDaycare();
   if (!daycare) throw new Error("daycare_id를 입력하세요.");
   el("workspaceMeta").textContent = `${daycare}${currentDate() ? ` · ${currentDate()}` : ""}`;
   await Promise.all([loadPets(), state.activePetId ? loadActiveExemplars() : Promise.resolve()]);
-  await loadGallery();
+  await Promise.all([loadGallery(), loadBucketSummary()]);
 }
 
 async function autoClassify() {
@@ -672,8 +859,12 @@ async function finalizeBuckets() {
     method: "POST",
     body: JSON.stringify({ daycare_id: daycare, date }),
   });
-  el("opsMeta").textContent = `bucket_count=${data.bucket_count} · total_images=${data.total_images}`;
-  log("Buckets finalized", { bucket_count: data.bucket_count, total_images: data.total_images });
+  state.lastBucketManifest = (String(data.manifest_path || "").split("/").pop() || "").trim() || null;
+  state.bucketSummary = data;
+  renderBucketSummary();
+  const quality = data.quality_metrics || {};
+  el("opsMeta").textContent = `bucket_count=${data.bucket_count} · total_images=${data.total_images} · total_instances=${quality.total_instances || 0}`;
+  log("Buckets finalized", { bucket_count: data.bucket_count, total_images: data.total_images, manifest_path: data.manifest_path });
 }
 
 async function resolveRepresentativeInstanceIds(imageIds) {
@@ -855,9 +1046,22 @@ function bootstrapDefaults() {
   el("apiBase").value = `${window.location.origin}/v1`;
   const today = new Date().toISOString().slice(0, 10);
   el("workspaceDate").value = today;
+  const zipButton = el("btnDownloadZip");
+  if (zipButton) {
+    zipButton.disabled = false;
+    zipButton.type = "button";
+  }
 }
 
 function bindEvents() {
+  el("workspaceDaycare").addEventListener("input", () => {
+    resetBucketExportState();
+  });
+
+  el("workspaceDate").addEventListener("change", () => {
+    resetBucketExportState();
+  });
+
   el("btnLoadWorkspace").addEventListener("click", async () => {
     const button = el("btnLoadWorkspace");
     try {
@@ -1004,6 +1208,7 @@ async function init() {
   bootstrapDefaults();
   bindEvents();
   renderInspector(null);
+  renderBucketSummary();
   renderPetButtons();
   renderActiveExemplars();
   renderGallery();

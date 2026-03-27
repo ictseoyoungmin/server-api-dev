@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import json
+import re
+import zipfile
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Set, Tuple
 from app.utils.timezone import business_tz
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
+from app.api.v1.endpoints.pets import _read_pet_name_map
 from app.core.config import settings
 from app.schemas.classification import (
     AutoClassifyItem,
@@ -18,6 +23,7 @@ from app.schemas.classification import (
     AutoClassifyResponse,
     AutoClassifySummary,
     BucketQualityMetrics,
+    FinalizeBucketImageItem,
     FinalizeBucketItem,
     FinalizeBucketsRequest,
     FinalizeBucketsResponse,
@@ -448,14 +454,138 @@ def _manifest_dir(daycare_id: str, day: date) -> Path:
     return Path(settings.reid_storage_dir) / "buckets" / daycare_id / day.isoformat()
 
 
+def _meta_path(image_id: str) -> Path:
+    return Path(settings.reid_storage_dir) / "meta" / f"{image_id}.json"
+
+
+def _read_meta_safe(image_id: str) -> Optional[dict]:
+    p = _meta_path(image_id)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _safe_archive_name(name: Optional[str], default: str = "unknown") -> str:
+    raw = (name or "").strip()
+    if not raw:
+        raw = default
+    safe = re.sub(r'[\/:*?"<>|]+', '_', raw)
+    safe = safe.replace('..', '_').strip().strip('.')
+    return safe or default
+
+
+def _bucket_image_from_meta(meta: dict) -> Optional[FinalizeBucketImageItem]:
+    img = meta.get("image") or {}
+    image_id = str(img.get("image_id") or "")
+    raw_path = str(img.get("raw_path") or "")
+    if not image_id or not raw_path:
+        return None
+    file_name = Path(raw_path).name
+    return FinalizeBucketImageItem(
+        image_id=image_id,
+        file_name=file_name,
+        original_filename=(str(img.get("original_filename")) if img.get("original_filename") is not None else None),
+        raw_path=raw_path,
+        raw_url=(str(img.get("raw_url")) if img.get("raw_url") is not None else None),
+        captured_at=(str(img.get("captured_at")) if img.get("captured_at") is not None else None),
+    )
+
+
+def _bucket_item_from_raw(bucket: dict, pet_name_map: Dict[str, str]) -> FinalizeBucketItem:
+    pet_id = str(bucket.get("pet_id") or "")
+    raw_images = bucket.get("images") or []
+    images: List[FinalizeBucketImageItem] = []
+    for item in raw_images:
+        if isinstance(item, dict):
+            images.append(FinalizeBucketImageItem(**item))
+    image_ids = bucket.get("image_ids") or [img.image_id for img in images]
+    image_ids = [str(x) for x in image_ids if str(x)]
+    if (not images) and image_ids:
+        for image_id in image_ids:
+            meta = _read_meta_safe(image_id)
+            if meta is None:
+                continue
+            detail = _bucket_image_from_meta(meta)
+            if detail is not None:
+                images.append(detail)
+    if not image_ids:
+        image_ids = [img.image_id for img in images]
+    pet_name = bucket.get("pet_name")
+    if pet_name in (None, ""):
+        pet_name = pet_name_map.get(pet_id)
+    return FinalizeBucketItem(
+        pet_id=pet_id,
+        pet_name=(str(pet_name) if pet_name not in (None, "") else None),
+        image_ids=image_ids,
+        images=images,
+        count=int(bucket.get("count") or len(image_ids)),
+    )
+
+
+def _select_manifest_path(daycare_id: str, day: date, manifest: Optional[str]) -> Path:
+    dir_path = _manifest_dir(daycare_id, day)
+    if not dir_path.exists():
+        raise HTTPException(status_code=404, detail="No bucket manifests found")
+
+    if manifest:
+        p = dir_path / manifest
+        if not p.exists():
+            raise HTTPException(status_code=404, detail="Manifest not found")
+        return p
+
+    candidates = sorted(dir_path.glob("finalize_*.json"))
+    if not candidates:
+        raise HTTPException(status_code=404, detail="No bucket manifests found")
+    return candidates[-1]
+
+
+def _load_bucket_response(daycare_id: str, day: date, manifest: Optional[str]) -> GetBucketsResponse:
+    target = _select_manifest_path(daycare_id, day, manifest)
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read manifest: {e}") from e
+
+    pet_name_map = _read_pet_name_map(daycare_id)
+    buckets = [_bucket_item_from_raw(b, pet_name_map) for b in (data.get("buckets") or [])]
+    qm_raw = data.get("quality_metrics") or {}
+    quality_metrics = BucketQualityMetrics(
+        total_day_images=int(qm_raw.get("total_day_images") or 0),
+        unclassified_images=int(qm_raw.get("unclassified_images") or 0),
+        unclassified_image_ratio=float(qm_raw.get("unclassified_image_ratio") or 0.0),
+        total_instances=int(qm_raw.get("total_instances") or 0),
+        accepted_instances=int(qm_raw.get("accepted_instances") or 0),
+        accepted_auto_instances=int(qm_raw.get("accepted_auto_instances") or 0),
+        unreviewed_instances=int(qm_raw.get("unreviewed_instances") or 0),
+        rejected_instances=int(qm_raw.get("rejected_instances") or 0),
+        auto_accept_ratio=float(qm_raw.get("auto_accept_ratio") or 0.0),
+    )
+    finalized_at_raw = data.get("finalized_at") or datetime.now(timezone.utc).isoformat()
+    finalized_at = datetime.fromisoformat(str(finalized_at_raw).replace("Z", "+00:00"))
+    return GetBucketsResponse(
+        daycare_id=str(data.get("daycare_id") or daycare_id),
+        date=day,
+        manifest_path=str(target),
+        finalized_at=finalized_at,
+        bucket_count=int(data.get("bucket_count") or len(buckets)),
+        total_images=int(data.get("total_images") or 0),
+        quality_metrics=quality_metrics,
+        buckets=buckets,
+    )
+
+
 @router.post("/buckets/finalize", response_model=FinalizeBucketsResponse)
 async def finalize_buckets(body: FinalizeBucketsRequest):
     """Build and persist per-pet daily image buckets from accepted assignments."""
     now = datetime.now(timezone.utc)
     metas = _load_day_metas(daycare_id=body.daycare_id, day=body.date, tab="ALL", pet_id=None, include_seed=False)
     allowed_pet_ids = set(body.pet_ids) if body.pet_ids else None
+    pet_name_map = _read_pet_name_map(body.daycare_id)
 
-    pet_map: Dict[str, Set[str]] = {}
+    pet_map: Dict[str, Dict[str, FinalizeBucketImageItem]] = {}
     total_day_images = len(metas)
     unclassified_images = 0
     total_instances = 0
@@ -471,6 +601,7 @@ async def finalize_buckets(body: FinalizeBucketsRequest):
         image_id = str(img.get("image_id") or "")
         if not image_id:
             continue
+        detail = _bucket_image_from_meta(m)
         for inst in m.get("instances") or []:
             total_instances += 1
             status = str(inst.get("assignment_status") or "UNREVIEWED").upper()
@@ -491,14 +622,25 @@ async def finalize_buckets(body: FinalizeBucketsRequest):
                 continue
             if allowed_pet_ids is not None and pet_id not in allowed_pet_ids:
                 continue
-            pet_map.setdefault(pet_id, set()).add(image_id)
+            pet_images = pet_map.setdefault(pet_id, {})
+            if detail is not None and image_id not in pet_images:
+                pet_images[image_id] = detail
 
     bucket_items: List[FinalizeBucketItem] = []
     unique_images: Set[str] = set()
     for pet_id in sorted(pet_map.keys()):
-        ids = sorted(pet_map[pet_id])
+        images = [pet_map[pet_id][iid] for iid in sorted(pet_map[pet_id].keys())]
+        ids = [img.image_id for img in images]
         unique_images.update(ids)
-        bucket_items.append(FinalizeBucketItem(pet_id=pet_id, image_ids=ids, count=len(ids)))
+        bucket_items.append(
+            FinalizeBucketItem(
+                pet_id=pet_id,
+                pet_name=pet_name_map.get(pet_id),
+                image_ids=ids,
+                images=images,
+                count=len(ids),
+            )
+        )
 
     quality_metrics = BucketQualityMetrics(
         total_day_images=total_day_images,
@@ -523,8 +665,8 @@ async def finalize_buckets(body: FinalizeBucketsRequest):
         "date": body.date.isoformat(),
         "bucket_count": len(bucket_items),
         "total_images": len(unique_images),
-        "quality_metrics": quality_metrics.model_dump(),
-        "buckets": [b.model_dump() for b in bucket_items],
+        "quality_metrics": quality_metrics.model_dump(mode="json"),
+        "buckets": [b.model_dump(mode="json") for b in bucket_items],
     }
     manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -547,49 +689,59 @@ async def get_buckets(
     manifest: Optional[str] = Query(default=None, description="Specific manifest filename"),
 ):
     """Load a persisted daily bucket manifest (latest by default)."""
-    dir_path = _manifest_dir(daycare_id, day)
-    if not dir_path.exists():
-        raise HTTPException(status_code=404, detail="No bucket manifests found")
+    return _load_bucket_response(daycare_id=daycare_id, day=day, manifest=manifest)
 
-    target: Optional[Path] = None
-    if manifest:
-        p = dir_path / manifest
-        if not p.exists():
-            raise HTTPException(status_code=404, detail="Manifest not found")
-        target = p
-    else:
-        candidates = sorted(dir_path.glob("finalize_*.json"))
-        if not candidates:
-            raise HTTPException(status_code=404, detail="No bucket manifests found")
-        target = candidates[-1]
 
-    try:
-        data = json.loads(target.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read manifest: {e}") from e
+@router.get("/buckets/{daycare_id}/{day}/zip")
+async def download_buckets_zip(
+    daycare_id: str,
+    day: date,
+    manifest: Optional[str] = Query(default=None, description="Specific manifest filename"),
+    root_folder_name: Optional[str] = Query(default=None, description="Archive root folder name"),
+):
+    """Create and return a zip archive shaped as root_folder/pet_name/daily_images."""
+    resp = _load_bucket_response(daycare_id=daycare_id, day=day, manifest=manifest)
+    manifest_path = Path(resp.manifest_path)
+    pet_name_map = _read_pet_name_map(daycare_id)
+    root_name = _safe_archive_name(root_folder_name, f"{daycare_id}_{day.isoformat()}")
+    zip_path = manifest_path.with_suffix('.zip')
 
-    buckets = [FinalizeBucketItem(**b) for b in (data.get("buckets") or [])]
-    qm_raw = data.get("quality_metrics") or {}
-    quality_metrics = BucketQualityMetrics(
-        total_day_images=int(qm_raw.get("total_day_images") or 0),
-        unclassified_images=int(qm_raw.get("unclassified_images") or 0),
-        unclassified_image_ratio=float(qm_raw.get("unclassified_image_ratio") or 0.0),
-        total_instances=int(qm_raw.get("total_instances") or 0),
-        accepted_instances=int(qm_raw.get("accepted_instances") or 0),
-        accepted_auto_instances=int(qm_raw.get("accepted_auto_instances") or 0),
-        unreviewed_instances=int(qm_raw.get("unreviewed_instances") or 0),
-        rejected_instances=int(qm_raw.get("rejected_instances") or 0),
-        auto_accept_ratio=float(qm_raw.get("auto_accept_ratio") or 0.0),
-    )
-    finalized_at_raw = data.get("finalized_at") or datetime.now(timezone.utc).isoformat()
-    finalized_at = datetime.fromisoformat(str(finalized_at_raw).replace("Z", "+00:00"))
-    return GetBucketsResponse(
-        daycare_id=str(data.get("daycare_id") or daycare_id),
-        date=day,
-        manifest_path=str(target),
-        finalized_at=finalized_at,
-        bucket_count=int(data.get("bucket_count") or len(buckets)),
-        total_images=int(data.get("total_images") or 0),
-        quality_metrics=quality_metrics,
-        buckets=buckets,
+    written = 0
+    used_paths: Set[str] = set()
+    with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+        for bucket in resp.buckets:
+            pet_folder = _safe_archive_name(bucket.pet_name or pet_name_map.get(bucket.pet_id) or bucket.pet_id, bucket.pet_id)
+            images = bucket.images
+            if not images and bucket.image_ids:
+                fallback_images: List[FinalizeBucketImageItem] = []
+                for image_id in bucket.image_ids:
+                    meta = _read_meta_safe(image_id)
+                    if meta is None:
+                        continue
+                    detail = _bucket_image_from_meta(meta)
+                    if detail is not None:
+                        fallback_images.append(detail)
+                images = fallback_images
+            for item in images:
+                src = Path(item.raw_path)
+                if not src.exists():
+                    continue
+                base_name = item.original_filename or item.file_name or src.name
+                file_name = _safe_archive_name(base_name, src.name)
+                arcname = f"{root_name}/{pet_folder}/{file_name}"
+                if arcname in used_paths:
+                    file_name = _safe_archive_name(f"{item.image_id}_{base_name}", f"{item.image_id}_{src.name}")
+                    arcname = f"{root_name}/{pet_folder}/{file_name}"
+                used_paths.add(arcname)
+                zf.write(src, arcname)
+                written += 1
+
+    if written == 0:
+        raise HTTPException(status_code=404, detail="No image files available for zip export")
+
+    return FileResponse(
+        path=zip_path,
+        media_type='application/zip',
+        filename=f"{root_name}.zip",
+        background=BackgroundTask(zip_path.unlink, missing_ok=True),
     )

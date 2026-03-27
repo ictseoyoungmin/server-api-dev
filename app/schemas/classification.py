@@ -81,9 +81,20 @@ class FinalizeBucketsRequest(BaseModel):
     pet_ids: Optional[List[str]] = None
 
 
+class FinalizeBucketImageItem(BaseModel):
+    image_id: str
+    file_name: str
+    original_filename: Optional[str] = None
+    raw_path: str
+    raw_url: Optional[str] = None
+    captured_at: Optional[str] = None
+
+
 class FinalizeBucketItem(BaseModel):
     pet_id: str
+    pet_name: Optional[str] = None
     image_ids: List[str]
+    images: List[FinalizeBucketImageItem] = Field(default_factory=list)
     count: int
 
 

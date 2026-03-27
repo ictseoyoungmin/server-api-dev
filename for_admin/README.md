@@ -12,6 +12,9 @@
 - 이미지/인스턴스 탐색 보조:
   - `GET /v1/images`
   - `GET /v1/images/{image_id}/meta`
+- Daily bucket 확정 + ZIP 다운로드:
+  - `POST /v1/buckets/finalize`
+  - `GET /v1/buckets/{daycare_id}/{day}/zip`
 
 ## 접속
 서버 실행 후 브라우저에서:
@@ -29,3 +32,8 @@
   - `업로드루트/엘/0.png`
 - 서버는 상대경로에서 pet 폴더명을 읽어 `pet_name`/`pet_id`로 사용합니다.
 - quick 모드와 동일하게 `pet_name` 고유성 가정을 사용합니다.
+
+## Daily Bucket ZIP
+- 좌측 `Daily Ops` 패널에서 `버킷 확정` 후 `ZIP 다운로드`를 사용할 수 있습니다.
+- ZIP은 기본적으로 `{root_folder_name}/{pet_name}/{daily_images}` 구조로 내려갑니다.
+- 버킷 확정 전 `ZIP 다운로드`를 누르면 먼저 버킷 확정을 하라는 안내가 표시됩니다.

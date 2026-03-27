@@ -273,6 +273,7 @@ async def ingest(
             "trainer_id": trainer_id,
             "captured_at": (cap_dt.isoformat() if cap_dt else None),
             "uploaded_at": uploaded_at.isoformat(),
+            "original_filename": (file.filename or None),
             "captured_at_ts": cap_ts,
             "uploaded_at_ts": int(uploaded_at.timestamp()),
             "width": w,

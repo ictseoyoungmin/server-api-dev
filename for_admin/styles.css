@@ -82,10 +82,16 @@ button.is-active {
   box-shadow: inset 0 0 0 1px rgba(19, 95, 87, 0.24), 0 10px 18px rgba(19, 95, 87, 0.08);
 }
 
-button.is-busy,
-button:disabled {
+button.is-busy {
   cursor: wait;
   opacity: 0.88;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+  transform: none;
+  box-shadow: none;
 }
 
 button.is-busy {
@@ -500,6 +506,219 @@ h2 {
   min-height: 240px;
 }
 
+.bucket-summary-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.bucket-summary-empty {
+  padding: 24px;
+  text-align: center;
+  border-radius: 18px;
+  border: 1px dashed var(--line);
+  background: rgba(255, 255, 255, 0.58);
+  color: var(--muted);
+}
+
+.bucket-summary-body {
+  display: grid;
+  gap: 16px;
+}
+
+.bucket-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.bucket-kpi-card,
+.bucket-block {
+  border: 1px solid rgba(88, 72, 34, 0.09);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.74);
+  box-shadow: 0 10px 24px rgba(62, 35, 12, 0.05);
+}
+
+.bucket-kpi-card {
+  padding: 14px 16px;
+  display: grid;
+  gap: 6px;
+}
+
+.bucket-kpi-label {
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+
+.bucket-kpi-value {
+  font-size: 1.8rem;
+  line-height: 1;
+  font-weight: 800;
+  font-family: "IBM Plex Serif", "Noto Serif KR", serif;
+}
+
+.bucket-summary-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 16px;
+}
+
+.bucket-block {
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.bucket-block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.bucket-block-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.bucket-block-head span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.bucket-status-bar {
+  display: flex;
+  overflow: hidden;
+  border-radius: 999px;
+  height: 14px;
+  background: rgba(29, 38, 31, 0.08);
+}
+
+.bucket-status-segment.accepted,
+.bucket-status-dot.accepted {
+  background: var(--teal);
+}
+
+.bucket-status-segment.unreviewed,
+.bucket-status-dot.unreviewed {
+  background: var(--amber);
+}
+
+.bucket-status-segment.rejected,
+.bucket-status-dot.rejected {
+  background: var(--rose);
+}
+
+.bucket-status-legend {
+  display: grid;
+  gap: 10px;
+}
+
+.bucket-status-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.bucket-status-item strong {
+  color: var(--ink);
+}
+
+.bucket-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.bucket-bars {
+  display: grid;
+  gap: 10px;
+}
+
+.bucket-bar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 140px) minmax(0, 1fr) 48px;
+  gap: 12px;
+  align-items: center;
+}
+
+.bucket-bar-label,
+.bucket-bar-value {
+  font-size: 0.9rem;
+}
+
+.bucket-bar-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 700;
+}
+
+.bucket-bar-track {
+  height: 12px;
+  border-radius: 999px;
+  background: rgba(29, 38, 31, 0.08);
+  overflow: hidden;
+}
+
+.bucket-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1d8e82, var(--teal));
+}
+
+.bucket-bar-value {
+  text-align: right;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.bucket-table-wrap {
+  overflow-x: auto;
+}
+
+.bucket-table-wrap.compact {
+  max-width: 460px;
+}
+
+.bucket-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.bucket-table.compact {
+  width: min(100%, 460px);
+}
+
+.bucket-table th,
+.bucket-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(80, 68, 45, 0.1);
+  text-align: left;
+}
+
+.bucket-table.compact th,
+.bucket-table.compact td {
+  padding: 8px 10px;
+}
+
+.bucket-table th {
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.bucket-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
 .detail-body {
   display: grid;
   gap: 14px;
@@ -704,6 +923,10 @@ h2 {
 }
 
 @media (max-width: 1180px) {
+  .bucket-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
   .dashboard {
     grid-template-columns: 1fr;
   }
@@ -747,6 +970,14 @@ h2 {
 
   .detail-hero {
     flex-direction: column;
+  }
+
+  .bucket-bar-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bucket-bar-value {
+    text-align: left;
   }
 
   .instance-row {

@@ -81,6 +81,7 @@
           </div>
           <div class="inline-actions wrap">
             <button id="btnFinalize">버킷 확정</button>
+            <button id="btnDownloadZip" type="button" onclick="window.handleDownloadZip && window.handleDownloadZip()">ZIP 다운로드</button>
             <button id="btnReloadGallery">현재 갤러리 새로고침</button>
           </div>
           <div id="opsMeta" class="meta"></div>
@@ -149,6 +150,17 @@
             <div id="detailMeta" class="meta"></div>
           </div>
           <div id="detailPane" class="detail-empty">이미지를 클릭하면 instance 상세가 표시됩니다.</div>
+        </section>
+
+        <section class="panel bucket-summary-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow small-eyebrow">Finalize Snapshot</p>
+              <h2>Bucket Summary</h2>
+            </div>
+            <div id="bucketSummaryMeta" class="meta"></div>
+          </div>
+          <div id="bucketSummaryPane" class="bucket-summary-empty">버킷 확정 후 통계가 표시됩니다.</div>
         </section>
       </section>
     </main>

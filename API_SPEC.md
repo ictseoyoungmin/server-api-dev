@@ -70,6 +70,50 @@ Seed policy:
 - When `image_role=SEED`, server stores only one instance per image (highest `confidence` detection).
 - When `image_role=DAILY`, multi-instance ingest is preserved.
 
+## 2.1) Identify (single-shot pet candidate lookup)
+`POST /v1/identify`
+
+**Content-Type**: `multipart/form-data`
+
+Fields:
+- `file` (required) : image
+- `daycare_id` (required) : string
+- `captured_at` (optional) : ISO8601 string
+- `top_k` (optional, default `1`) : integer (`1..50`)
+
+Response:
+- `image_id`: ingested image id
+- `instance_id`: representative detected instance id (highest `confidence`)
+- `species`: detected species
+- `bbox`: representative instance bbox
+- `candidates[]`: top-k exemplar-based pet candidates
+  - `pet_id`
+  - `pet_name`
+  - `score` (vector similarity score from Qdrant cosine search)
+
+Response example:
+```json
+{
+  "image_id": "img_xxx",
+  "instance_id": "ins_xxx",
+  "species": "DOG",
+  "bbox": {"x1": 0.1, "y1": 0.2, "x2": 0.5, "y2": 0.9},
+  "candidates": [
+    {
+      "pet_id": "pet_pomi",
+      "pet_name": "뽀미",
+      "score": 0.91
+    }
+  ]
+}
+```
+
+Notes:
+- Internally this endpoint runs ingest first, then searches active exemplars (`is_seed=true`, `seed_active=true`) by vector similarity.
+- `captured_at` is optional. When omitted, server receive time is used and passed into ingest.
+- This endpoint does not require a client-supplied `date`.
+- If multiple instances are detected, only the highest-confidence instance is used for candidate search.
+
 ## 3) Search (gallery ordering)
 `POST /v1/search`
 
@@ -365,13 +409,37 @@ Behavior:
 Behavior:
 - `date` is interpreted in business timezone (`settings.business_tz`, default `Asia/Seoul`).
 - Scans accepted assignments (`assignment_status=ACCEPTED`) on that day.
-- Builds `pet_id -> image_ids[]` mapping.
+- Builds per-pet daily buckets.
 - Persists manifest JSON under:
   - `storage_dir/buckets/{daycare_id}/{YYYY-MM-DD}/finalize_*.json`
+- Each bucket contains both:
+  - `image_ids[]`
+  - `images[]` with per-image export metadata: `image_id`, `file_name`, `original_filename`, `raw_path`, `raw_url`, `captured_at`
 - Response/manifest includes `quality_metrics`:
   - `total_day_images`, `unclassified_images`, `unclassified_image_ratio`
   - `total_instances`, `accepted_instances`, `accepted_auto_instances`
   - `unreviewed_instances`, `rejected_instances`, `auto_accept_ratio`
+- `pet_name` is also included when available from daycare pet registry.
+
+Response bucket item example:
+```json
+{
+  "pet_id": "pet_pomi",
+  "pet_name": "뽀미",
+  "image_ids": ["img_a", "img_b"],
+  "images": [
+    {
+      "image_id": "img_a",
+      "file_name": "img_a.jpg",
+      "original_filename": "IMG_1234.JPG",
+      "raw_path": "data/reid/images/daily/img_a.jpg",
+      "raw_url": "/v1/images/img_a?variant=raw",
+      "captured_at": "2026-03-26T09:00:00+09:00"
+    }
+  ],
+  "count": 2
+}
+```
 
 `GET /v1/buckets/{daycare_id}/{day}`
 
@@ -526,3 +594,19 @@ Notes:
 Storage (PoC):
 - `verification_storage_dir/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.json`
 - `verification_storage_dir/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.jpg`
+
+`GET /v1/buckets/{daycare_id}/{day}/zip`
+
+Purpose:
+- Build and return a ZIP archive from the finalized daily buckets.
+- Archive layout: `{root_folder_name}/{pet_name}/{daily_images}`
+
+Query:
+- `manifest` (optional): specific manifest filename to export
+- `root_folder_name` (optional): override archive root folder name
+
+Notes:
+- Uses `images[].raw_path` from the manifest when available.
+- Older manifests without `images[]` are backward-compatible: server resolves `image_id -> meta -> raw_path` before zipping.
+- If `original_filename` is available, it is preferred as the file name inside the ZIP.
+

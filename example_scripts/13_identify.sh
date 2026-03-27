@@ -21,7 +21,7 @@ if [ -z "${IMG}" ] && [ -f "${DEFAULT_IMG}" ]; then
 fi
 
 if [ -z "${IMG}" ] || [ ! -f "${IMG}" ]; then
-  echo "Usage: IMG=/path/to.jpg DAYCARE_ID=dc_001 bash $0" >&2
+  echo "Usage: IMG=/path/to.jpg DAYCARE_ID=dc_t0 bash $0" >&2
   echo "Optional: CAPTURED_AT=2026-03-25T09:00:00+09:00 TOP_K=3" >&2
   echo "Hint: set IMG, or place a file at ${DEFAULT_IMG}" >&2
   exit 1

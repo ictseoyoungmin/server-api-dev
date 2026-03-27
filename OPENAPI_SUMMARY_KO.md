@@ -28,7 +28,7 @@
 ### 앱별 엔드포인트 요약 (빠른 참조)
 
 현재 코드 기준 HTTP 엔드포인트 수:
-- 총 28개 (`GET /` 포함, `/admin` 정적 GUI 제외)
+- 총 30개 (`GET /` 포함, `/admin` 정적 GUI 제외)
 
 | Endpoint | Face Verification 앱 | Semi-Auto Classification 앱 | 비고 |
 | :--- | :---: | :---: | :--- |
@@ -37,11 +37,12 @@
 | `GET /v1/health/qdrant` | O | O | Qdrant 컬렉션/포인트/벡터 샘플 상태 |
 | `GET /v1/daycares` | - | O | daycare 목록/요약 조회 (관리자) |
 | `DELETE /v1/daycares/{daycare_id}` | - | O | daycare 단위 DB+스토리지 초기화 (관리자) |
-| `POST /v1/embed` | O | - | Verification의 Remote embedding |
+| `POST /v1/embed` | O | (선택) | Verification의 Remote embedding |
 | `POST /v1/embed/batch` | - | - | 운영 플로우보단 도구/테스트 성격 |
 | `POST /v1/ingest` | - | O | 이미지 인입 + 검출 + 임베딩 |
-| `POST /v1/search` | - | - | 기존 gallery 검색 API |
-| `POST /v1/labels` | - | O | 인스턴스 단위 라벨링 |
+| `POST /v1/identify` | - | O | 단건 이미지 식별(ingest + exemplar 검색) |
+| `POST /v1/search` | - | (간접/실험) | 기존 gallery 검색 API |
+| `POST /v1/labels` | (선택) O | O | 인스턴스 단위 라벨링 |
 | `GET /v1/exemplars` | - | O | 초기 등록 이미지(Exemplar) 조회/검색 |
 | `POST /v1/exemplars` | - | O | 초기 등록 이미지(Exemplar) 등록 |
 | `POST /v1/exemplars/upload` | - | O | 단일 seed 이미지 빠른 등록 |
@@ -50,8 +51,8 @@
 | `DELETE /v1/exemplars/{instance_id}` | - | O | 초기 등록 이미지(Exemplar) 해제 |
 | `GET /v1/images` | - | O | 갤러리 조회 |
 | `GET /v1/images/{image_id}` | - | O | 이미지 바이트 조회 |
-| `GET /v1/images/{image_id}/meta` | - | O | 이미지/instance 메타 조회 |
-| `GET /v1/pets` | - | O | daycare 기준 pet 목록/통계 |
+| `GET /v1/images/{image_id}/meta` | (선택) O | O | 이미지/instance 메타 조회 |
+| `GET /v1/pets` | (선택) O | O | daycare 기준 pet 목록/통계 |
 | `GET /v1/sync-images` | O | - | Facebank 해시 중복 체크 |
 | `POST /v1/sync-images` | O | - | Facebank 이미지 업로드 |
 | `POST /v1/trials` | O | - | 인증 시도/피드백 업로드 |
@@ -59,6 +60,7 @@
 | `POST /v1/classify/similar` | - | O | 탭 내 유사 정렬 |
 | `POST /v1/buckets/finalize` | - | O | 일자 버킷 확정 |
 | `GET /v1/buckets/{daycare_id}/{day}` | - | O | 버킷 manifest 조회 |
+| `GET /v1/buckets/{daycare_id}/{day}/zip` | - | O | 버킷 ZIP 다운로드 |
 | `POST /v1/admin/images/labels` | - | O | 관리자용 image_id 단위 bucket 포함/해제/제외 |
 
 ## 1. 루트 / 헬스체크
@@ -264,6 +266,51 @@ SEED 정책:
 - `image_role=SEED`는 이미지당 1개 인스턴스만 저장합니다.
 - 검출이 여러 개면 `confidence` 최고 인스턴스 1개만 임베딩/저장됩니다.
 - `image_role=DAILY`는 multi-instance를 유지합니다.
+
+## 3.1 `POST /v1/identify`
+
+단일 이미지 업로드만으로 대표 instance와 pet 후보를 반환하는 식별용 엔드포인트
+
+사용 앱:
+- Semi-Auto Classification 앱
+
+- Content-Type: `multipart/form-data`
+
+Form Fields:
+- `file` (required, file)
+- `daycare_id` (required, string)
+- `captured_at` (optional, string, ISO8601)
+- `top_k` (optional, int, default=`1`, 범위 `1..50`)
+
+응답 개요:
+- `image_id`: 인입된 이미지 ID
+- `instance_id`: 대표 검출 instance ID (현재는 최고 confidence 1개 사용)
+- `species`: 대표 instance 종
+- `bbox`: 대표 instance bbox
+- `candidates[]`: exemplar 유사도 기반 pet 후보 (`pet_id`, `pet_name`, `score`)
+
+응답 예시:
+```json
+{
+  "image_id": "img_xxx",
+  "instance_id": "ins_xxx",
+  "species": "DOG",
+  "bbox": { "x1": 0.1, "y1": 0.2, "x2": 0.5, "y2": 0.9 },
+  "candidates": [
+    {
+      "pet_id": "pet_pomi",
+      "pet_name": "뽀미",
+      "score": 0.91
+    }
+  ]
+}
+```
+
+동작 비고:
+- 내부적으로 `ingest` 후, active exemplar(`is_seed=true`, `seed_active=true`)를 cosine 유사도 기반으로 검색합니다.
+- `captured_at` 미전송 시 서버 수신 시각 기준으로 ingest에 전달합니다.
+- 클라이언트가 별도 `date`를 전달할 필요는 없습니다.
+- 검출 instance가 여러 개면 현재는 최고 confidence instance 1개만 후보 검색에 사용합니다.
 
 ## 4. 검색 (갤러리 정렬)
 
@@ -745,7 +792,6 @@ Form Fields:
 - `facebankVersion` (required, int)
 - `score` (required, float)
 - `threshold` (optional, float)
-- `sharpness` (optional, float): 클라이언트 프레임 선명도 지표
 - `isSuccess` (required, bool)
 - `userFeedback` (required, bool)
 - `timestamp` (optional, string): ISO8601 (`Z` 허용)
@@ -972,13 +1018,19 @@ Form Fields:
   "buckets": [
     {
       "pet_id": "pet_id_1",
+      "pet_name": "뽀미",
       "image_ids": ["image_id_1", "image_id_2"],
+      "images": [
+        {
+          "image_id": "image_id_1",
+          "file_name": "img_abc.jpg",
+          "original_filename": "IMG_1234.JPG",
+          "raw_path": "data/reid/images/daily/img_abc.jpg",
+          "raw_url": "/v1/images/image_id_1?variant=raw",
+          "captured_at": "2026-02-25T09:10:11+09:00"
+        }
+      ],
       "count": 2
-    },
-    {
-      "pet_id": "pet_id_2",
-      "image_ids": ["image_id_3"],
-      "count": 1
     }
   ]
 }
@@ -986,6 +1038,8 @@ Form Fields:
 
 비고:
 - `buckets`는 `Map<String, List<String>>`가 아니라 `List[FinalizeBucketItem]` 입니다.
+- 각 bucket은 `image_ids[]`와 `images[]`를 함께 가질 수 있습니다.
+- `images[]`는 ZIP export용 메타(`raw_path`, `original_filename` 등)를 포함합니다.
 - `manifest_path`, `quality_metrics`는 `snake_case` 필드명입니다.
 
 ### `GET /v1/buckets/{daycare_id}/{day}`
@@ -1003,6 +1057,7 @@ Query Parameters:
 
 응답 구조:
 - `FinalizeBucketsResponse`와 유사 (`manifest_path`, `quality_metrics`, `buckets[]`)
+- 기존 manifest라도 서버가 가능하면 `images[]`를 복원해 함께 내려줍니다.
 
 응답 예시(축약):
 ```json
@@ -1027,12 +1082,47 @@ Query Parameters:
   "buckets": [
     {
       "pet_id": "pet_pomi",
+      "pet_name": "뽀미",
       "image_ids": ["img_1", "img_2"],
+      "images": [
+        {
+          "image_id": "img_1",
+          "file_name": "img_1.jpg",
+          "original_filename": "IMG_0001.JPG",
+          "raw_path": "data/reid/images/daily/img_1.jpg",
+          "raw_url": "/v1/images/img_1?variant=raw",
+          "captured_at": "2026-02-13T08:30:00+09:00"
+        }
+      ],
       "count": 2
     }
   ]
 }
 ```
+
+### `GET /v1/buckets/{daycare_id}/{day}/zip`
+저장된 버킷 manifest를 기준으로 ZIP 파일 다운로드
+
+사용 앱:
+- Semi-Auto Classification 앱 (핵심)
+- for_admin 대시보드의 ZIP 다운로드 버튼과 연결
+
+Path Parameters:
+- `daycare_id` (string)
+- `day` (date, `YYYY-MM-DD`)
+
+Query Parameters:
+- `manifest` (optional, string): 특정 manifest 파일명 지정
+- `root_folder_name` (optional, string): ZIP 루트 폴더명 지정
+
+동작 비고:
+- ZIP 내부 구조는 기본적으로 `{root_folder_name}/{pet_name}/{daily_images}` 입니다.
+- manifest에 `images[]`가 있으면 `raw_path`를 그대로 사용합니다.
+- 예전 manifest처럼 `image_ids[]`만 있어도 서버가 meta를 읽어 `raw_path`를 복원해 압축합니다.
+- `original_filename`이 있으면 ZIP 내부 파일명으로 우선 사용합니다.
+
+응답:
+- `application/zip`
 
 ## 에러 코드 요약 (빈번)
 
