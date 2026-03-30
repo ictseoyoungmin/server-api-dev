@@ -2,7 +2,6 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8001/v1}"
-DAYCARE_ID="${DAYCARE_ID:-dc_001}"
 TODAY_UTC="${TODAY_UTC:-$(date -u +%F)}"
 UPDATED_BY="${UPDATED_BY:-scenario_runner}"
 RESET_FIRST="${RESET_FIRST:-true}"
@@ -118,7 +117,6 @@ if [[ ${#seed_files[@]} -eq 0 ]]; then
 fi
 
 form_args=(
-  -F "daycare_id=$DAYCARE_ID"
   -F "updated_by=$UPDATED_BY"
   -F "sync_label=true"
   -F "apply_to_all_instances=false"
@@ -179,7 +177,6 @@ for f in "${daily_files[@]}"; do
   ts="${TODAY_UTC}T09:00:00Z"
   curl -sS -X POST "$BASE_URL/ingest" \
     -F "file=@$f" \
-    -F "daycare_id=$DAYCARE_ID" \
     -F "trainer_id=$UPDATED_BY" \
     -F "captured_at=$ts" \
     -F "image_role=DAILY" \
@@ -191,7 +188,7 @@ echo "daily ingested: $ingested"
 
 
 echo "[3/6] Auto classify"
-auto_body="{\"daycare_id\":\"$DAYCARE_ID\",\"date\":\"$TODAY_UTC\",\"auto_accept_threshold\":0.5,\"candidate_threshold\":0.4,\"search_limit\":200,\"dry_run\":false,\"labeled_by\":\"$UPDATED_BY\"}"
+auto_body="{\"date\":\"$TODAY_UTC\",\"auto_accept_threshold\":0.5,\"candidate_threshold\":0.4,\"search_limit\":200,\"dry_run\":false,\"labeled_by\":\"$UPDATED_BY\"}"
 auto_resp="$(json_post "$BASE_URL/classify/auto" "$auto_body")"
 echo "$auto_resp" | python3 -m json.tool >/tmp/auto_classify.json
 python3 - <<'PY'
@@ -203,14 +200,14 @@ PY
 
 
 echo "[4/6] Verify tabs (seed images should be excluded by default)"
-unclassified_resp="$(curl -sS "$BASE_URL/images?daycare_id=$DAYCARE_ID&date=$TODAY_UTC&tab=UNCLASSIFIED&limit=200")"
+unclassified_resp="$(curl -sS "$BASE_URL/images?date=$TODAY_UTC&tab=UNCLASSIFIED&limit=200")"
 UNCLASSIFIED_RESP="$unclassified_resp" python3 - <<'PY'
 import json, os
 d=json.loads(os.environ['UNCLASSIFIED_RESP'])
 print(json.dumps({"tab":"UNCLASSIFIED","count":d.get("count",0)}, ensure_ascii=False))
 PY
 
-pets_resp="$(curl -sS "$BASE_URL/pets?daycare_id=$DAYCARE_ID")"
+pets_resp="$(curl -sS "$BASE_URL/pets")"
 PETS_RESP="$pets_resp" python3 - <<'PY'
 import json, os
 d=json.loads(os.environ['PETS_RESP'])
@@ -228,7 +225,6 @@ PY
 )
 for p in "${pet_ids[@]}"; do
   pet_tab_resp="$(curl -sS -G "$BASE_URL/images" \
-    --data-urlencode "daycare_id=$DAYCARE_ID" \
     --data-urlencode "date=$TODAY_UTC" \
     --data-urlencode "tab=PET" \
     --data-urlencode "pet_id=$p" \
@@ -243,7 +239,7 @@ done
 
 
 echo "[5/6] Finalize buckets + ensure seed image_ids are not included"
-finalize_body="{\"daycare_id\":\"$DAYCARE_ID\",\"date\":\"$TODAY_UTC\"}"
+finalize_body="{\"date\":\"$TODAY_UTC\"}"
 finalize_resp="$(json_post "$BASE_URL/buckets/finalize" "$finalize_body")"
 echo "$finalize_resp" | python3 -m json.tool >/tmp/finalize.json
 python3 - <<'PY'

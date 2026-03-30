@@ -16,7 +16,6 @@ class LabelAssignment(BaseModel):
 
 
 class LabelRequest(BaseModel):
-    daycare_id: str
     labeled_by: Optional[str] = None
     assignments: List[LabelAssignment]
 

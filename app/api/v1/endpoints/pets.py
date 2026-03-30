@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Dict
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from app.core.config import settings
 from app.schemas.pets import PetListItem, PetsListResponse
+from app.utils.pet_registry import read_pet_name_map
 from app.vector_db.qdrant_store import QdrantStore, build_filter
 
 router = APIRouter()
@@ -23,34 +21,18 @@ def _get_store(request: Request) -> QdrantStore:
     return store
 
 
-def _read_pet_name_map(daycare_id: str) -> Dict[str, str]:
-    """Load optional daycare-scoped pet_id -> pet_name mapping from shared registry."""
-    p = Path(settings.shared_storage_dir) / "registry" / "pets" / f"{daycare_id}.json"
-    if not p.exists():
-        return {}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    out: Dict[str, str] = {}
-    for k, v in data.items():
-        pet_id = str(k or "").strip()
-        pet_name = str(v or "").strip()
-        if pet_id and pet_name:
-            out[pet_id] = pet_name
-    return out
+def _read_pet_name_map(daycare_id: str | None = None) -> Dict[str, str]:
+    return read_pet_name_map(daycare_id)
 
 
 @router.get("/pets", response_model=PetsListResponse)
-async def list_pets(request: Request, daycare_id: str = Query(...)):
-    """List pet IDs used in this daycare, with optional display names."""
+async def list_pets(request: Request):
+    """List global pet IDs used across all stored exemplars/labels, with optional display names."""
     store = _get_store(request)
-    pet_name_map = _read_pet_name_map(daycare_id)
+    pet_name_map = _read_pet_name_map()
     agg: Dict[str, dict] = {}
 
-    qf = build_filter(daycare_id=daycare_id)
+    qf = build_filter()
     points = await run_in_threadpool(store.scroll_points, qf, 1000, False)
     for p in points:
         payload = p.payload or {}
@@ -85,4 +67,4 @@ async def list_pets(request: Request, daycare_id: str = Query(...)):
         )
         for _k, v in sorted(agg.items(), key=lambda kv: kv[0])
     ]
-    return PetsListResponse(daycare_id=daycare_id, count=len(items), items=items)
+    return PetsListResponse(count=len(items), items=items)

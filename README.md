@@ -72,14 +72,12 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 `POST /v1/ingest`
 - multipart/form-data fields
   - `file` (image)
-  - `daycare_id` (string)
   - `trainer_id` (optional)
   - `captured_at` (optional ISO8601)
 
 Example:
 ```bash
 curl -X POST "http://localhost:8000/v1/ingest?include_embedding=false" \
-  -F "daycare_id=dc_001" \
   -F "file=@/path/to/photo.jpg"
 ```
 
@@ -90,7 +88,6 @@ curl -X POST "http://localhost:8000/v1/ingest?include_embedding=false" \
 curl -X POST "http://localhost:8000/v1/search" \
   -H "Content-Type: application/json" \
   -d '{
-    "daycare_id": "dc_001",
     "query": {"instance_ids": ["ins_..."], "merge": "RRF"},
     "filters": {"species": "DOG"},
     "top_k_images": 200
@@ -104,14 +101,13 @@ curl -X POST "http://localhost:8000/v1/search" \
 curl -X POST "http://localhost:8000/v1/labels" \
   -H "Content-Type: application/json" \
   -d '{
-    "daycare_id": "dc_001",
     "assignments": [{"instance_id": "ins_...", "pet_id": "pet_aaa", "source": "MANUAL"}]
   }'
 ```
 
 ### 5) Images (gallery)
 `GET /v1/images`
-- Query: `daycare_id`, `limit`, `offset`
+- Query: `date`, `tab`, `pet_id`, `include_seed`, `limit`, `offset`
 
 `GET /v1/images/{image_id}?variant=raw|thumb`
 

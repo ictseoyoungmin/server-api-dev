@@ -22,7 +22,7 @@
 3. 반자동 분류 실행 (`/classify/auto`)
 4. 이미지 멀티 선택 후 유사 정렬 (`/classify/similar`)
 5. 선택 이미지 수동 라벨 액션 (`/labels`: ACCEPT/REJECT/CLEAR)
-6. 일자 버킷 확정 (`/buckets/finalize`) 및 확인 (`/buckets/{daycare_id}/{day}`)
+6. 일자 버킷 확정 (`/buckets/finalize`) 및 확인 (`/buckets/{day}`)
 
 ---
 
@@ -32,7 +32,6 @@
 `GET /v1/images`
 
 Query:
-- `daycare_id` (required)
 - `date` (optional, `YYYY-MM-DD`, UTC)
 - `tab` (optional: `ALL | UNCLASSIFIED | PET`)
 - `pet_id` (required when `tab=PET`)
@@ -55,7 +54,6 @@ UI 사용:
 Request 예시:
 ```json
 {
-  "daycare_id": "dc_001",
   "date": "2026-02-13",
   "auto_accept_threshold": 0.78,
   "candidate_threshold": 0.62,
@@ -75,7 +73,6 @@ UI 사용:
 Request 예시:
 ```json
 {
-  "daycare_id": "dc_001",
   "date": "2026-02-13",
   "tab": "UNCLASSIFIED",
   "query_instance_ids": ["ins_..."],
@@ -101,7 +98,6 @@ UI 사용:
 Request 예시 (ACCEPT):
 ```json
 {
-  "daycare_id": "dc_001",
   "labeled_by": "trainer_001",
   "assignments": [
     {
@@ -126,7 +122,6 @@ Request 예시 (ACCEPT):
 Request 예시:
 ```json
 {
-  "daycare_id": "dc_001",
   "date": "2026-02-13"
 }
 ```
@@ -137,7 +132,7 @@ Request 예시:
 - `quality_metrics`
 
 ## 3.7 버킷 조회
-`GET /v1/buckets/{daycare_id}/{day}`
+`GET /v1/buckets/{day}`
 
 옵션:
 - `manifest` query로 특정 manifest 지정 가능
@@ -232,7 +227,7 @@ UI 공통 처리:
 
 ## 10) 인수인계 시 전달물
 
-- API 환경값: `API_BASE`, `daycare_id`, test date
+- API 환경값: `API_BASE`, test date
 - 샘플 시나리오 스크립트:
   - `example_scripts/07_classification_smoke.sh`
 - 서버 API 스펙:

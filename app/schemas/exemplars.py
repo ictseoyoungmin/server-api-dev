@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -16,13 +16,11 @@ class ExemplarCreateItem(BaseModel):
 
 
 class ExemplarCreateRequest(BaseModel):
-    daycare_id: str
     updated_by: Optional[str] = None
     items: List[ExemplarCreateItem] = Field(min_length=1, max_length=200)
 
 
 class ExemplarUpdateRequest(BaseModel):
-    daycare_id: str
     updated_by: Optional[str] = None
     pet_id: Optional[str] = None
     note: Optional[str] = None
@@ -34,7 +32,6 @@ class ExemplarUpdateRequest(BaseModel):
 
 class ExemplarItem(BaseModel):
     instance_id: str
-    daycare_id: str
     image_id: Optional[str] = None
     species: Optional[str] = None
     pet_id: str
@@ -50,26 +47,25 @@ class ExemplarItem(BaseModel):
 
 
 class ExemplarListResponse(BaseModel):
-    daycare_id: str
     count: int
     items: List[ExemplarItem]
 
 
 class ExemplarMutationResponse(BaseModel):
-    daycare_id: str
     updated_at: datetime
     count: int
     items: List[ExemplarItem]
 
 
 class ExemplarQuickRegisterResponse(BaseModel):
-    daycare_id: str
+    mode: Literal["create", "append"]
     pet_id: str
     pet_name: str
     image_id: str
     updated_at: datetime
     count: int
     items: List[ExemplarItem]
+    message: Optional[str] = None
 
 
 class ExemplarFolderUploadItemResult(BaseModel):
@@ -83,9 +79,9 @@ class ExemplarFolderUploadItemResult(BaseModel):
 
 
 class ExemplarFolderUploadResponse(BaseModel):
-    daycare_id: str
     updated_at: datetime
     total_files: int
     succeeded: int
     failed: int
     results: List[ExemplarFolderUploadItemResult]
+    message: Optional[str] = None

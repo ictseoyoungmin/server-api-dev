@@ -10,7 +10,6 @@ from app.schemas.ingest import InstanceOut
 
 class GalleryImageItem(BaseModel):
     image_id: str
-    daycare_id: str
     image_role: Literal["DAILY", "SEED"] = "DAILY"
     trainer_id: Optional[str] = None
     captured_at: Optional[datetime] = None
@@ -24,7 +23,6 @@ class GalleryImageItem(BaseModel):
 
 
 class ImagesListResponse(BaseModel):
-    daycare_id: str
     count: int
     items: List[GalleryImageItem]
 

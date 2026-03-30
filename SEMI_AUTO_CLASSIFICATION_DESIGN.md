@@ -1,7 +1,7 @@
 # Semi-Auto Classification Design (PoC -> v2.0)
 
 ## 1. Goal
-Build a semi-automatic daily photo classification flow for daycare trainers, with a clear admin-managed exemplar lifecycle.
+Build a semi-automatic daily photo classification flow for trainers, with a clear admin-managed exemplar lifecycle.
 
 - Daily photos: ~2,000 images.
 - One image may contain multiple pets.
@@ -26,7 +26,7 @@ New architecture requirement:
 ## 3. Domain Model
 
 ### 3.1 Entities
-- `Pet`: registered identity in daycare.
+- `Pet`: globally registered identity.
 - `Photo`: uploaded trainer image (`image_id`), date-bound.
 - `Instance`: detected object in one photo (`instance_id`), has one embedding vector.
 - `Assignment`: per-instance daily labeling state.
@@ -51,7 +51,7 @@ Qdrant payload fields:
 - `seed_updated_at_ts`, `seed_updated_by`
 
 ### 3.4 Threshold Policy
-Per daycare profile:
+Per deployment profile:
 - `auto_accept_threshold` (ex: 0.78)
 - `candidate_threshold` (ex: 0.62)
 
@@ -63,7 +63,7 @@ Decision:
 ## 4. API Design
 
 ### 4.1 Exemplar Management (Admin)
-- `GET /v1/exemplars`: list/search exemplars (`daycare_id`, `pet_id`, `species`, `active`, `q`, paging).
+- `GET /v1/exemplars`: list/search exemplars (`pet_id`, `species`, `active`, `q`, paging).
 - `POST /v1/exemplars`: register one or more instance IDs as exemplars.
 - `PATCH /v1/exemplars/{instance_id}`: update exemplar metadata.
 - `DELETE /v1/exemplars/{instance_id}`: remove exemplar status from instance.
@@ -75,7 +75,7 @@ Decision:
 - `POST /v1/classify/similar`
 - `POST /v1/labels`
 - `POST /v1/buckets/finalize`
-- `GET /v1/buckets/{daycare_id}/{date}`
+- `GET /v1/buckets/{date}`
 
 ## 5. Storage and Sync Rules
 

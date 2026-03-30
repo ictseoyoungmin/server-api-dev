@@ -4,7 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 API_BASE="${API_BASE:-http://localhost:8001}"
-DAYCARE_ID="${DAYCARE_ID:-dc_001}"
 QUERY_INSTANCE_IDS_JSON="${QUERY_INSTANCE_IDS_JSON:-[\"ins_...\"]}"
 MERGE="${MERGE:-RRF}"
 SPECIES="${SPECIES:-DOG}"
@@ -33,7 +32,6 @@ fi
 
 cat > /tmp/search_body.json <<JSON
 {
-  "daycare_id": "${DAYCARE_ID}",
   "query": {"instance_ids": ${QUERY_INSTANCE_IDS_JSON}, "merge": "${MERGE}"},
   "filters": {"species": "${SPECIES}"},
   "top_k_images": ${TOP_K_IMAGES},

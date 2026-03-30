@@ -23,46 +23,87 @@
             <h2>Workspace</h2>
             <button id="btnLoadWorkspace" class="primary">불러오기</button>
           </div>
-          <div class="grid two">
-            <label>Daycare ID<input id="workspaceDaycare" placeholder="dc_001" /></label>
+          <div class="grid one">
             <label>Date<input id="workspaceDate" type="date" /></label>
-          </div>
-          <div class="inline-actions">
-            <button id="btnLoadDaycares">Daycare 목록</button>
-            <button id="btnQdrantStatus">Qdrant 상태</button>
           </div>
           <div id="workspaceMeta" class="meta"></div>
         </section>
 
         <section class="panel">
           <div class="panel-head">
-            <h2>Daycare List</h2>
-          </div>
-          <ul id="daycareList" class="daycare-list"></ul>
-        </section>
-
-        <section class="panel">
-          <div class="panel-head">
             <h2>Registration</h2>
           </div>
-          <div class="stack-form grouped-form">
-            <div class="group-head">
-              <p class="eyebrow small-eyebrow">Single Seed</p>
-              <div class="meta">이름과 기준 이미지를 함께 넣고 바로 등록</div>
+          <div class="registration-stack">
+            <div class="stack-form grouped-form upload-card">
+              <div class="group-head">
+                <div class="group-title-row">
+                  <p class="eyebrow small-eyebrow">Single Seed</p>
+                  <div class="help-anchor">
+                    <button type="button" class="help-trigger" data-help-target="helpSingleSeed" aria-expanded="false" aria-controls="helpSingleSeed">?</button>
+                    <div id="helpSingleSeed" class="help-popover" hidden>
+                      <strong>설명</strong>
+                      <p>기존 pet에 seed를 추가하거나, 새 pet을 생성하는 두 가지 모드로 등록합니다.</p>
+                      <p>같은 pet에 이미지를 더 넣을 때는 <code>기존 pet에 추가</code>를 사용하세요.</p>
+                    </div>
+                  </div>
+                </div>
+                <div class="meta">같은 pet에 추가할지, 새 pet을 만들지 먼저 선택</div>
+              </div>
+              <div class="seed-mode-toggle" role="tablist" aria-label="Single Seed 등록 모드">
+                <button id="btnSingleSeedAppendMode" type="button" class="seed-mode-button is-active" data-mode="append">기존 pet에 추가</button>
+                <button id="btnSingleSeedCreateMode" type="button" class="seed-mode-button" data-mode="create">새 pet 생성</button>
+              </div>
+              <label id="singleSeedExistingWrap">기존 Pet<select id="uExistingPet"></select></label>
+              <label id="singleSeedNewWrap" hidden>Pet Name<input id="uPetName" placeholder="초코" /></label>
+              <label>Seed Image<input id="uFile" type="file" accept="image/*" /></label>
+              <button id="btnQuickUpload">등록</button>
             </div>
-            <label>Pet Name<input id="uPetName" placeholder="초코" /></label>
-            <label>Seed Image<input id="uFile" type="file" accept="image/*" /></label>
-            <button id="btnQuickUpload">빠른 등록</button>
-          </div>
-          <hr />
-          <div class="stack-form">
-            <label>Folder Seed Upload<input id="fFolder" type="file" webkitdirectory directory multiple /></label>
-            <button id="btnFolderUpload">폴더 일괄 등록</button>
-          </div>
-          <hr />
-          <div class="stack-form">
-            <label>Daily Upload (test)<input id="dFiles" type="file" accept="image/*" multiple /></label>
-            <button id="btnDailyUpload">Daily 업로드</button>
+
+            <div class="stack-form grouped-form upload-card">
+              <div class="group-head">
+                <div class="group-title-row">
+                  <p class="eyebrow small-eyebrow">Folder Seed Upload</p>
+                  <div class="help-anchor">
+                    <button type="button" class="help-trigger" data-help-target="helpFolderSeed" aria-expanded="false" aria-controls="helpFolderSeed">?</button>
+                    <div id="helpFolderSeed" class="help-popover" hidden>
+                      <strong>설명</strong>
+                      <p>폴더명 기준으로 여러 펫의 seed 이미지를 한 번에 등록합니다.</p>
+                      <p>폴더 구조는 <code>root/pet_name/image.jpg</code> 형태를 권장합니다.</p>
+                      <p>예시:</p>
+                      <pre class="help-tree">root/
+  뽀미/
+    xxx.jpg
+    xxx.png
+  초코/
+    xxx.jpg
+    xxx.jpeg</pre>
+                    </div>
+                  </div>
+                </div>
+                <div class="meta">폴더 구조를 읽어 pet별 seed exemplar를 일괄 등록</div>
+              </div>
+              <label>Folder Seed Upload<input id="fFolder" type="file" webkitdirectory directory multiple /></label>
+              <button id="btnFolderUpload">폴더 일괄 등록</button>
+            </div>
+
+            <div class="stack-form grouped-form upload-card">
+              <div class="group-head">
+                <div class="group-title-row">
+                  <p class="eyebrow small-eyebrow">Daily Upload</p>
+                  <div class="help-anchor">
+                    <button type="button" class="help-trigger" data-help-target="helpDailyUpload" aria-expanded="false" aria-controls="helpDailyUpload">?</button>
+                    <div id="helpDailyUpload" class="help-popover" hidden>
+                      <strong>설명</strong>
+                      <p>daily 이미지를 한 장 혹은 여러 장 올려 분류 플로우를 진행할 수 있습니다.</p>
+                      <p>업로드 후에는 '전체' 또는 '미분류' 탭에서 바로 확인할 수 있습니다.</p>
+                    </div>
+                  </div>
+                </div>
+                <div class="meta">수집 이미지 업로드</div>
+              </div>
+              <label>Daily Upload<input id="dFiles" type="file" accept="image/*" multiple /></label>
+              <button id="btnDailyUpload">Daily 업로드</button>
+            </div>
           </div>
         </section>
 
@@ -70,18 +111,60 @@
           <div class="panel-head">
             <h2>Daily Ops</h2>
           </div>
-          <div class="grid two">
-            <label>Auto Accept<input id="autoAcceptThreshold" type="number" step="0.01" min="0" max="1" value="0.6" /></label>
-            <label>Select Mode
+          <div class="grid one">
+            <label>
+              <span class="field-help-row">
+                <span>Auto Accept</span>
+                <span class="help-anchor">
+                  <button type="button" class="help-trigger" data-help-target="helpAutoAccept" aria-expanded="false" aria-controls="helpAutoAccept">?</button>
+                  <span id="helpAutoAccept" class="help-popover help-popover-right" hidden>
+                    <strong>설명</strong>
+                    <p>자동 분류에서 즉시 ACCEPT 처리할 최소 score 기준입니다.</p>
+                    <p>값이 높을수록 보수적으로 확정합니다.</p>
+                  </span>
+                </span>
+              </span>
+              <input id="autoAcceptThreshold" type="number" step="0.01" min="0" max="1" value="0.5" />
+            </label>
+            <label>
+              <span class="field-help-row">
+                <span>Select Mode</span>
+                <span class="help-anchor">
+                  <button type="button" class="help-trigger" data-help-target="helpSelectMode" aria-expanded="false" aria-controls="helpSelectMode">?</button>
+                  <span id="helpSelectMode" class="help-popover help-popover-right" hidden>
+                    <strong>설명</strong>
+                    <p>이미지 단위 라벨링 시 어떤 instance를 선택할지 정합니다.</p>
+                    <p><code>BEST_CONFIDENCE</code>는 대표 1개, <code>ALL</code>은 검출된 전체 instance에 적용합니다.</p>
+                  </span>
+                </span>
+              </span>
               <select id="selectionMode">
                 <option value="BEST_CONFIDENCE">BEST_CONFIDENCE</option>
                 <option value="ALL">ALL</option>
               </select>
             </label>
           </div>
-          <div class="inline-actions wrap">
-            <button id="btnFinalize">버킷 확정</button>
-            <button id="btnDownloadZip" type="button" onclick="window.handleDownloadZip && window.handleDownloadZip()">ZIP 다운로드</button>
+          <div class="inline-actions wrap daily-ops-actions">
+            <span class="action-help-group">
+              <button id="btnFinalize">버킷 확정</button>
+              <span class="help-anchor">
+                <button type="button" class="help-trigger" data-help-target="helpFinalize" aria-expanded="false" aria-controls="helpFinalize">?</button>
+                <span id="helpFinalize" class="help-popover help-popover-right" hidden>
+                  <strong>설명</strong>
+                  <p>현재 날짜의 ACCEPT 결과를 pet별 버킷으로 고정하고 manifest를 저장합니다.</p>
+                </span>
+              </span>
+            </span>
+            <span class="action-help-group">
+              <button id="btnDownloadZip" type="button" onclick="window.handleDownloadZip && window.handleDownloadZip()">ZIP 다운로드</button>
+              <span class="help-anchor">
+                <button type="button" class="help-trigger" data-help-target="helpDownloadZip" aria-expanded="false" aria-controls="helpDownloadZip">?</button>
+                <span id="helpDownloadZip" class="help-popover" hidden>
+                  <strong>설명</strong>
+                  <p>가장 최근에 확정한 버킷 기준으로 ZIP 파일을 내려받습니다.</p>
+                </span>
+              </span>
+            </span>
             <button id="btnReloadGallery">현재 갤러리 새로고침</button>
           </div>
           <div id="opsMeta" class="meta"></div>
@@ -90,6 +173,7 @@
         <section class="panel">
           <div class="panel-head">
             <h2>Qdrant</h2>
+            <button id="btnQdrantStatus">새로고침</button>
           </div>
           <pre id="qdrantStatusBox" class="status-box"></pre>
         </section>
@@ -107,7 +191,7 @@
           <div class="panel-head">
             <div>
               <p class="eyebrow small-eyebrow">Seed Registry</p>
-              <h2>Pet Buttons</h2>
+              <h2>Pet List</h2>
             </div>
             <div id="petMeta" class="meta"></div>
           </div>
@@ -118,9 +202,9 @@
         <section class="panel work-panel">
           <div class="work-header">
             <div class="view-tabs">
-              <button id="btnViewAll" data-view="ALL" class="tab active">ALL daily</button>
-              <button id="btnViewUnclassified" data-view="UNCLASSIFIED" class="tab">UNCLASSIFIED</button>
-              <button id="btnViewPet" data-view="PET" class="tab">PET bucket</button>
+              <button id="btnViewAll" data-view="ALL" class="tab active">전체</button>
+              <button id="btnViewUnclassified" data-view="UNCLASSIFIED" class="tab">미분류</button>
+              <button id="btnViewPet" data-view="PET" class="tab">PET 버킷</button>
             </div>
             <div class="search-controls">
               <button id="btnAutoClassify" class="primary">자동 분류</button>

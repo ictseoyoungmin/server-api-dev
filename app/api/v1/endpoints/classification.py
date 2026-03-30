@@ -117,7 +117,6 @@ def _is_seed_image(meta: dict) -> bool:
 
 
 def _load_day_metas(
-    daycare_id: str,
     day: date,
     tab: Literal["ALL", "UNCLASSIFIED", "PET"] = "ALL",
     pet_id: Optional[str] = None,
@@ -132,8 +131,6 @@ def _load_day_metas(
         try:
             meta = json.loads(p.read_text(encoding="utf-8"))
             img = meta.get("image") or {}
-            if str(img.get("daycare_id")) != daycare_id:
-                continue
             if _meta_day_business(meta) != day_str:
                 continue
             if (not include_seed) and _is_seed_image(meta):
@@ -194,7 +191,6 @@ async def auto_classify(request: Request, body: AutoClassifyRequest):
 
     start_ts, end_ts = _day_range_ts(body.date)
     day_filter = build_filter(
-        daycare_id=body.daycare_id,
         species=body.species,
         captured_from_ts=start_ts,
         captured_to_ts=end_ts,
@@ -215,7 +211,7 @@ async def auto_classify(request: Request, body: AutoClassifyRequest):
         image_id = str(p.payload.get("image_id") or "")
         species = str(p.payload.get("species") or "UNKNOWN")
 
-        search_filter = build_filter(daycare_id=body.daycare_id, species=species if species in ("DOG", "CAT") else None)
+        search_filter = build_filter(species=species if species in ("DOG", "CAT") else None)
         hits = await run_in_threadpool(store.search, p.vector, body.search_limit, search_filter)
 
         best_pet_id: Optional[str] = None
@@ -315,7 +311,6 @@ async def auto_classify(request: Request, body: AutoClassifyRequest):
     return AutoClassifyResponse(
         requested_at=now,
         date=body.date,
-        daycare_id=body.daycare_id,
         dry_run=body.dry_run,
         summary=AutoClassifySummary(
             scanned_instances=len(targets),
@@ -337,7 +332,6 @@ async def classify_similar(request: Request, body: SimilarSearchRequest):
     store = _get_store(request)
     now = datetime.now(timezone.utc)
     metas = _load_day_metas(
-        daycare_id=body.daycare_id,
         day=body.date,
         tab=body.tab,
         pet_id=body.pet_id,
@@ -359,7 +353,6 @@ async def classify_similar(request: Request, body: SimilarSearchRequest):
         return SimilarSearchResponse(
             requested_at=now,
             date=body.date,
-            daycare_id=body.daycare_id,
             tab=body.tab,
             pet_id=body.pet_id,
             query_debug={"used_vectors": 0, "merge": body.merge, "allowed_images": 0},
@@ -378,7 +371,7 @@ async def classify_similar(request: Request, body: SimilarSearchRequest):
         raise HTTPException(status_code=404, detail="No query instance vectors found in vector DB")
 
     start_ts, end_ts = _day_range_ts(body.date)
-    f = build_filter(daycare_id=body.daycare_id, captured_from_ts=start_ts, captured_to_ts=end_ts)
+    f = build_filter(captured_from_ts=start_ts, captured_to_ts=end_ts)
 
     per_query_image_ranked: List[List[str]] = []
     best_sim: Dict[str, float] = {}
@@ -436,7 +429,6 @@ async def classify_similar(request: Request, body: SimilarSearchRequest):
     return SimilarSearchResponse(
         requested_at=now,
         date=body.date,
-        daycare_id=body.daycare_id,
         tab=body.tab,
         pet_id=body.pet_id,
         query_debug={
@@ -450,8 +442,8 @@ async def classify_similar(request: Request, body: SimilarSearchRequest):
     )
 
 
-def _manifest_dir(daycare_id: str, day: date) -> Path:
-    return Path(settings.reid_storage_dir) / "buckets" / daycare_id / day.isoformat()
+def _manifest_dir(day: date) -> Path:
+    return Path(settings.reid_storage_dir) / "buckets" / day.isoformat()
 
 
 def _meta_path(image_id: str) -> Path:
@@ -522,11 +514,12 @@ def _bucket_item_from_raw(bucket: dict, pet_name_map: Dict[str, str]) -> Finaliz
         image_ids=image_ids,
         images=images,
         count=int(bucket.get("count") or len(image_ids)),
+        instance_count=int(bucket.get("instance_count") or bucket.get("count") or len(image_ids)),
     )
 
 
-def _select_manifest_path(daycare_id: str, day: date, manifest: Optional[str]) -> Path:
-    dir_path = _manifest_dir(daycare_id, day)
+def _select_manifest_path(day: date, manifest: Optional[str]) -> Path:
+    dir_path = _manifest_dir(day)
     if not dir_path.exists():
         raise HTTPException(status_code=404, detail="No bucket manifests found")
 
@@ -542,14 +535,14 @@ def _select_manifest_path(daycare_id: str, day: date, manifest: Optional[str]) -
     return candidates[-1]
 
 
-def _load_bucket_response(daycare_id: str, day: date, manifest: Optional[str]) -> GetBucketsResponse:
-    target = _select_manifest_path(daycare_id, day, manifest)
+def _load_bucket_response(day: date, manifest: Optional[str]) -> GetBucketsResponse:
+    target = _select_manifest_path(day, manifest)
     try:
         data = json.loads(target.read_text(encoding="utf-8"))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read manifest: {e}") from e
 
-    pet_name_map = _read_pet_name_map(daycare_id)
+    pet_name_map = _read_pet_name_map(None)
     buckets = [_bucket_item_from_raw(b, pet_name_map) for b in (data.get("buckets") or [])]
     qm_raw = data.get("quality_metrics") or {}
     quality_metrics = BucketQualityMetrics(
@@ -566,7 +559,6 @@ def _load_bucket_response(daycare_id: str, day: date, manifest: Optional[str]) -
     finalized_at_raw = data.get("finalized_at") or datetime.now(timezone.utc).isoformat()
     finalized_at = datetime.fromisoformat(str(finalized_at_raw).replace("Z", "+00:00"))
     return GetBucketsResponse(
-        daycare_id=str(data.get("daycare_id") or daycare_id),
         date=day,
         manifest_path=str(target),
         finalized_at=finalized_at,
@@ -581,11 +573,12 @@ def _load_bucket_response(daycare_id: str, day: date, manifest: Optional[str]) -
 async def finalize_buckets(body: FinalizeBucketsRequest):
     """Build and persist per-pet daily image buckets from accepted assignments."""
     now = datetime.now(timezone.utc)
-    metas = _load_day_metas(daycare_id=body.daycare_id, day=body.date, tab="ALL", pet_id=None, include_seed=False)
+    metas = _load_day_metas(day=body.date, tab="ALL", pet_id=None, include_seed=False)
     allowed_pet_ids = set(body.pet_ids) if body.pet_ids else None
-    pet_name_map = _read_pet_name_map(body.daycare_id)
+    pet_name_map = _read_pet_name_map(None)
 
     pet_map: Dict[str, Dict[str, FinalizeBucketImageItem]] = {}
+    pet_instance_counts: Dict[str, int] = {}
     total_day_images = len(metas)
     unclassified_images = 0
     total_instances = 0
@@ -622,6 +615,7 @@ async def finalize_buckets(body: FinalizeBucketsRequest):
                 continue
             if allowed_pet_ids is not None and pet_id not in allowed_pet_ids:
                 continue
+            pet_instance_counts[pet_id] = int(pet_instance_counts.get(pet_id, 0)) + 1
             pet_images = pet_map.setdefault(pet_id, {})
             if detail is not None and image_id not in pet_images:
                 pet_images[image_id] = detail
@@ -639,6 +633,7 @@ async def finalize_buckets(body: FinalizeBucketsRequest):
                 image_ids=ids,
                 images=images,
                 count=len(ids),
+                instance_count=int(pet_instance_counts.get(pet_id, 0)),
             )
         )
 
@@ -654,14 +649,13 @@ async def finalize_buckets(body: FinalizeBucketsRequest):
         auto_accept_ratio=(float(accepted_auto_instances) / float(total_instances)) if total_instances > 0 else 0.0,
     )
 
-    manifest_dir = _manifest_dir(body.daycare_id, body.date)
+    manifest_dir = _manifest_dir(body.date)
     manifest_dir.mkdir(parents=True, exist_ok=True)
     stamp = now.strftime("%Y%m%dT%H%M%SZ")
     manifest_path = manifest_dir / f"finalize_{stamp}.json"
 
     payload = {
         "finalized_at": now.isoformat(),
-        "daycare_id": body.daycare_id,
         "date": body.date.isoformat(),
         "bucket_count": len(bucket_items),
         "total_images": len(unique_images),
@@ -672,7 +666,6 @@ async def finalize_buckets(body: FinalizeBucketsRequest):
 
     return FinalizeBucketsResponse(
         finalized_at=now,
-        daycare_id=body.daycare_id,
         date=body.date,
         bucket_count=len(bucket_items),
         total_images=len(unique_images),
@@ -682,28 +675,26 @@ async def finalize_buckets(body: FinalizeBucketsRequest):
     )
 
 
-@router.get("/buckets/{daycare_id}/{day}", response_model=GetBucketsResponse)
+@router.get("/buckets/{day}", response_model=GetBucketsResponse)
 async def get_buckets(
-    daycare_id: str,
     day: date,
     manifest: Optional[str] = Query(default=None, description="Specific manifest filename"),
 ):
     """Load a persisted daily bucket manifest (latest by default)."""
-    return _load_bucket_response(daycare_id=daycare_id, day=day, manifest=manifest)
+    return _load_bucket_response(day=day, manifest=manifest)
 
 
-@router.get("/buckets/{daycare_id}/{day}/zip")
+@router.get("/buckets/{day}/zip")
 async def download_buckets_zip(
-    daycare_id: str,
     day: date,
     manifest: Optional[str] = Query(default=None, description="Specific manifest filename"),
     root_folder_name: Optional[str] = Query(default=None, description="Archive root folder name"),
 ):
     """Create and return a zip archive shaped as root_folder/pet_name/daily_images."""
-    resp = _load_bucket_response(daycare_id=daycare_id, day=day, manifest=manifest)
+    resp = _load_bucket_response(day=day, manifest=manifest)
     manifest_path = Path(resp.manifest_path)
-    pet_name_map = _read_pet_name_map(daycare_id)
-    root_name = _safe_archive_name(root_folder_name, f"{daycare_id}_{day.isoformat()}")
+    pet_name_map = _read_pet_name_map(None)
+    root_name = _safe_archive_name(root_folder_name, day.isoformat())
     zip_path = manifest_path.with_suffix('.zip')
 
     written = 0

@@ -4,7 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 API_BASE="${API_BASE:-http://localhost:8001}"
-DAYCARE_ID="${DAYCARE_ID:-dc_001}"
 TAB="${TAB:-UNCLASSIFIED}"
 PET_ID="${PET_ID:-}"
 AUTO_ACCEPT_THRESHOLD="${AUTO_ACCEPT_THRESHOLD:-0.78}"
@@ -61,7 +60,6 @@ fi
 echo "[1/4] auto classify"
 cat > /tmp/classify_auto_body.json <<JSON
 {
-  "daycare_id": "${DAYCARE_ID}",
   "date": "${DAY}",
   "auto_accept_threshold": ${AUTO_ACCEPT_THRESHOLD},
   "candidate_threshold": ${CANDIDATE_THRESHOLD},
@@ -85,7 +83,6 @@ else
 fi
 cat > /tmp/classify_similar_body.json <<JSON
 {
-  "daycare_id": "${DAYCARE_ID}",
   "date": "${DAY}",
   "tab": "${TAB}"${PET_FIELD},
   "query_instance_ids": ["${INSTANCE_ID}"],
@@ -101,7 +98,6 @@ curl -sS -X POST "${API_BASE}/v1/classify/similar" \
 echo "[3/4] finalize buckets"
 cat > /tmp/finalize_buckets_body.json <<JSON
 {
-  "daycare_id": "${DAYCARE_ID}",
   "date": "${DAY}"
 }
 JSON
@@ -120,7 +116,7 @@ PY
 
 echo "[4/4] read latest (or created) buckets"
 if [ -n "${MANIFEST_NAME}" ]; then
-  curl -sS "${API_BASE}/v1/buckets/${DAYCARE_ID}/${DAY}?manifest=${MANIFEST_NAME}" | python3 -m json.tool
+  curl -sS "${API_BASE}/v1/buckets/${DAY}?manifest=${MANIFEST_NAME}" | python3 -m json.tool
 else
-  curl -sS "${API_BASE}/v1/buckets/${DAYCARE_ID}/${DAY}" | python3 -m json.tool
+  curl -sS "${API_BASE}/v1/buckets/${DAY}" | python3 -m json.tool
 fi

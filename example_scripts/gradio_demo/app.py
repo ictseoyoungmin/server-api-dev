@@ -9,12 +9,9 @@ import gradio as gr
 import requests
 
 DEFAULT_API_BASE = os.getenv("API_BASE", "http://localhost:8001")
-DEFAULT_DAYCARE_ID = os.getenv("DAYCARE_ID", "dc_001")
-
 
 def _api_base(v: str) -> str:
     return (v or DEFAULT_API_BASE).rstrip("/")
-
 
 def _abs_url(api_base: str, u: Optional[str]) -> Optional[str]:
     if not u:
@@ -24,7 +21,6 @@ def _abs_url(api_base: str, u: Optional[str]) -> Optional[str]:
     if not u.startswith("/"):
         u = f"/{u}"
     return f"{api_base}{u}"
-
 
 def _request_json(method: str, api_base: str, path: str, **kwargs) -> Dict[str, Any]:
     url = f"{_api_base(api_base)}{path}"
@@ -40,10 +36,8 @@ def _request_json(method: str, api_base: str, path: str, **kwargs) -> Dict[str, 
         raise RuntimeError(f"Unexpected response type: {type(payload)}")
     return payload
 
-
 def _fetch_images(
     api_base: str,
-    daycare_id: str,
     day: str,
     tab: str,
     pet_id: str,
@@ -51,7 +45,6 @@ def _fetch_images(
     offset: int,
 ) -> Dict[str, Any]:
     params: Dict[str, Any] = {
-        "daycare_id": daycare_id,
         "limit": int(limit),
         "offset": int(offset),
     }
@@ -63,11 +56,8 @@ def _fetch_images(
         params["pet_id"] = pet_id
     return _request_json("GET", api_base, "/v1/images", params=params)
 
-
-def _fetch_pets(api_base: str, daycare_id: str) -> Dict[str, Any]:
-    params: Dict[str, Any] = {"daycare_id": daycare_id}
-    return _request_json("GET", api_base, "/v1/pets", params=params)
-
+def _fetch_pets(api_base: str) -> Dict[str, Any]:
+    return _request_json("GET", api_base, "/v1/pets")
 
 def _image_table_rows(items: Sequence[Dict[str, Any]]) -> List[List[Any]]:
     rows: List[List[Any]] = []
@@ -82,7 +72,6 @@ def _image_table_rows(items: Sequence[Dict[str, Any]]) -> List[List[Any]]:
         )
     return rows
 
-
 def _gallery_items(api_base: str, items: Sequence[Dict[str, Any]]) -> List[Tuple[str, str]]:
     out: List[Tuple[str, str]] = []
     for i in items:
@@ -94,7 +83,6 @@ def _gallery_items(api_base: str, items: Sequence[Dict[str, Any]]) -> List[Tuple
         out.append((thumb, caption))
     return out
 
-
 def _choices(items: Sequence[Dict[str, Any]]) -> List[Tuple[str, str]]:
     out: List[Tuple[str, str]] = []
     for i in items:
@@ -104,7 +92,6 @@ def _choices(items: Sequence[Dict[str, Any]]) -> List[Tuple[str, str]]:
         ts = i.get("captured_at") or i.get("uploaded_at") or ""
         out.append((f"{image_id} | {ts}", image_id))
     return out
-
 
 def _pet_choices(items: Sequence[Dict[str, Any]]) -> List[Tuple[str, str]]:
     out: List[Tuple[str, str]] = []
@@ -118,10 +105,8 @@ def _pet_choices(items: Sequence[Dict[str, Any]]) -> List[Tuple[str, str]]:
         out.append((f"{pet_name} ({pet_id}) | img={image_count}, inst={instance_count}", pet_id))
     return out
 
-
 def _fetch_meta(api_base: str, image_id: str) -> Dict[str, Any]:
     return _request_json("GET", api_base, f"/v1/images/{image_id}/meta")
-
 
 def _collect_instance_ids(api_base: str, image_ids: Sequence[str]) -> List[str]:
     seen = set()
@@ -136,12 +121,11 @@ def _collect_instance_ids(api_base: str, image_ids: Sequence[str]) -> List[str]:
             out.append(iid)
     return out
 
-
-def on_load_gallery(api_base: str, daycare_id: str, day: str, tab: str, pet_id: str, limit: int, offset: int):
+def on_load_gallery(api_base: str, day: str, tab: str, pet_id: str, limit: int, offset: int):
     try:
         if tab == "PET" and not pet_id:
             raise RuntimeError("tab=PET이면 pet_id가 필요합니다.")
-        data = _fetch_images(api_base, daycare_id, day, tab, pet_id, limit, offset)
+        data = _fetch_images(api_base, day, tab, pet_id, limit, offset)
         items = data.get("items") or []
         status = f"로드 완료: {len(items)}장 | tab={tab} | day={day}"
         return (
@@ -155,10 +139,9 @@ def on_load_gallery(api_base: str, daycare_id: str, day: str, tab: str, pet_id: 
     except Exception as e:
         return f"오류: {e}", [], gr.update(choices=[], value=[]), [], {"error": str(e)}, {}
 
-
-def on_load_pets(api_base: str, daycare_id: str):
+def on_load_pets(api_base: str):
     try:
-        data = _fetch_pets(api_base, daycare_id)
+        data = _fetch_pets(api_base)
         items = data.get("items") or []
         rows: List[List[Any]] = []
         for i in items:
@@ -175,10 +158,8 @@ def on_load_pets(api_base: str, daycare_id: str):
     except Exception as e:
         return f"오류: {e}", gr.update(choices=[]), [], {"error": str(e)}
 
-
 def on_auto_classify(
     api_base: str,
-    daycare_id: str,
     day: str,
     auto_accept_threshold: float,
     candidate_threshold: float,
@@ -187,7 +168,6 @@ def on_auto_classify(
 ):
     try:
         body = {
-            "daycare_id": daycare_id,
             "date": day,
             "auto_accept_threshold": float(auto_accept_threshold),
             "candidate_threshold": float(candidate_threshold),
@@ -206,10 +186,8 @@ def on_auto_classify(
     except Exception as e:
         return f"오류: {e}", {"error": str(e)}
 
-
 def on_similar(
     api_base: str,
-    daycare_id: str,
     day: str,
     tab: str,
     pet_id: str,
@@ -229,7 +207,6 @@ def on_similar(
             raise RuntimeError("선택 이미지에서 instance_id를 찾지 못했습니다.")
 
         body: Dict[str, Any] = {
-            "daycare_id": daycare_id,
             "date": day,
             "tab": tab,
             "query_instance_ids": instance_ids,
@@ -283,10 +260,8 @@ def on_similar(
     except Exception as e:
         return f"오류: {e}", [], gr.update(choices=[], value=[]), [], {"error": str(e)}, {}
 
-
 def on_apply_labels(
     api_base: str,
-    daycare_id: str,
     labeled_by: str,
     action: str,
     pet_id_for_label: str,
@@ -315,7 +290,6 @@ def on_apply_labels(
             assignments.append(item)
 
         body = {
-            "daycare_id": daycare_id,
             "labeled_by": labeled_by or None,
             "assignments": assignments,
         }
@@ -325,11 +299,10 @@ def on_apply_labels(
     except Exception as e:
         return f"오류: {e}", {"error": str(e)}
 
-
-def on_finalize(api_base: str, daycare_id: str, day: str, pet_ids_csv: str):
+def on_finalize(api_base: str, day: str, pet_ids_csv: str):
     try:
         pet_ids = [p.strip() for p in (pet_ids_csv or "").split(",") if p.strip()]
-        body: Dict[str, Any] = {"daycare_id": daycare_id, "date": day}
+        body: Dict[str, Any] = {"date": day}
         if pet_ids:
             body["pet_ids"] = pet_ids
         data = _request_json("POST", api_base, "/v1/buckets/finalize", json=body)
@@ -344,10 +317,9 @@ def on_finalize(api_base: str, daycare_id: str, day: str, pet_ids_csv: str):
     except Exception as e:
         return f"오류: {e}", {"error": str(e)}, ""
 
-
-def on_get_buckets(api_base: str, daycare_id: str, day: str, manifest: str):
+def on_get_buckets(api_base: str, day: str, manifest: str):
     try:
-        path = f"/v1/buckets/{daycare_id}/{day}"
+        path = f"/v1/buckets/{day}"
         params = {"manifest": manifest} if manifest else None
         data = _request_json("GET", api_base, path, params=params)
         qm = data.get("quality_metrics") or {}
@@ -359,7 +331,6 @@ def on_get_buckets(api_base: str, daycare_id: str, day: str, manifest: str):
     except Exception as e:
         return f"오류: {e}", {"error": str(e)}
 
-
 def build_demo() -> gr.Blocks:
     with gr.Blocks(title="Dogface Semi-Auto Gradio Demo") as demo:
         gr.Markdown("# Dogface Semi-Auto Classification Demo")
@@ -367,7 +338,6 @@ def build_demo() -> gr.Blocks:
 
         with gr.Row():
             api_base = gr.Textbox(label="API_BASE", value=DEFAULT_API_BASE, scale=2)
-            daycare_id = gr.Textbox(label="daycare_id", value=DEFAULT_DAYCARE_ID)
             day = gr.Textbox(label="date (YYYY-MM-DD)", value=str(date.today()))
             load_pets_btn = gr.Button("Load Pets")
 
@@ -431,13 +401,13 @@ def build_demo() -> gr.Blocks:
 
         load_btn.click(
             fn=on_load_gallery,
-            inputs=[api_base, daycare_id, day, tab, pet_id, limit, offset],
+            inputs=[api_base, day, tab, pet_id, limit, offset],
             outputs=[status, gallery, selected_image_ids, image_table, api_response, image_state],
         )
 
         load_pets_btn.click(
             fn=on_load_pets,
-            inputs=[api_base, daycare_id],
+            inputs=[api_base],
             outputs=[status, pet_id, pet_table, api_response],
         )
 
@@ -445,7 +415,6 @@ def build_demo() -> gr.Blocks:
             fn=on_auto_classify,
             inputs=[
                 api_base,
-                daycare_id,
                 day,
                 auto_accept_threshold,
                 candidate_threshold,
@@ -459,7 +428,6 @@ def build_demo() -> gr.Blocks:
             fn=on_similar,
             inputs=[
                 api_base,
-                daycare_id,
                 day,
                 tab,
                 pet_id,
@@ -473,24 +441,23 @@ def build_demo() -> gr.Blocks:
 
         label_btn.click(
             fn=on_apply_labels,
-            inputs=[api_base, daycare_id, labeled_by, action, pet_id_for_label, selected_image_ids],
+            inputs=[api_base, labeled_by, action, pet_id_for_label, selected_image_ids],
             outputs=[status, api_response],
         )
 
         finalize_btn.click(
             fn=on_finalize,
-            inputs=[api_base, daycare_id, day, pet_ids_csv],
+            inputs=[api_base, day, pet_ids_csv],
             outputs=[status, api_response, manifest],
         )
 
         get_buckets_btn.click(
             fn=on_get_buckets,
-            inputs=[api_base, daycare_id, day, manifest],
+            inputs=[api_base, day, manifest],
             outputs=[status, api_response],
         )
 
     return demo
-
 
 if __name__ == "__main__":
     app = build_demo()

@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field
 
 
 class AutoClassifyRequest(BaseModel):
-    daycare_id: str
     date: date
     species: Optional[Literal["DOG", "CAT"]] = None
     auto_accept_threshold: float = Field(default=0.78, ge=0.0, le=1.0)
@@ -38,14 +37,12 @@ class AutoClassifyItem(BaseModel):
 class AutoClassifyResponse(BaseModel):
     requested_at: datetime
     date: date
-    daycare_id: str
     dry_run: bool
     summary: AutoClassifySummary
     items: List[AutoClassifyItem]
 
 
 class SimilarSearchRequest(BaseModel):
-    daycare_id: str
     date: date
     tab: Literal["ALL", "UNCLASSIFIED", "PET"] = "ALL"
     pet_id: Optional[str] = None
@@ -68,7 +65,6 @@ class SimilarSearchItem(BaseModel):
 class SimilarSearchResponse(BaseModel):
     requested_at: datetime
     date: date
-    daycare_id: str
     tab: Literal["ALL", "UNCLASSIFIED", "PET"]
     pet_id: Optional[str] = None
     query_debug: dict
@@ -76,7 +72,6 @@ class SimilarSearchResponse(BaseModel):
 
 
 class FinalizeBucketsRequest(BaseModel):
-    daycare_id: str
     date: date
     pet_ids: Optional[List[str]] = None
 
@@ -96,6 +91,7 @@ class FinalizeBucketItem(BaseModel):
     image_ids: List[str]
     images: List[FinalizeBucketImageItem] = Field(default_factory=list)
     count: int
+    instance_count: int = 0
 
 
 class BucketQualityMetrics(BaseModel):
@@ -112,7 +108,6 @@ class BucketQualityMetrics(BaseModel):
 
 class FinalizeBucketsResponse(BaseModel):
     finalized_at: datetime
-    daycare_id: str
     date: date
     bucket_count: int
     total_images: int
@@ -122,7 +117,6 @@ class FinalizeBucketsResponse(BaseModel):
 
 
 class GetBucketsResponse(BaseModel):
-    daycare_id: str
     date: date
     manifest_path: str
     finalized_at: datetime

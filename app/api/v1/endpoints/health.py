@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Request
+
+from app.core.config import settings
 
 router = APIRouter()
 
@@ -62,6 +66,8 @@ def qdrant_health(request: Request):
         sampled_points = len(sample_points)
         sampled_with_vector = 0
         sampled_vector_dim = None
+        meta_dir = Path(settings.reid_storage_dir) / "meta"
+        total_images = len(list(meta_dir.glob("*.json"))) if meta_dir.exists() else 0
         for p in sample_points:
             vec = getattr(p, "vector", None)
             if vec is None:
@@ -79,6 +85,7 @@ def qdrant_health(request: Request):
                 "collection": store.collection,
                 "vectors_count": getattr(collection, "vectors_count", None),
                 "points_count": int(points_count),
+                "total_images": int(total_images),
                 "indexed_vectors_count": getattr(collection, "indexed_vectors_count", None),
                 "status": str(getattr(collection, "status", None)),
                 "sampled_points": sampled_points,

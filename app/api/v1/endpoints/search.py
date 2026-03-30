@@ -71,7 +71,6 @@ async def search(request: Request, body: SearchRequest):
     # Filters
     species = body.filters.species if body.filters else None
     f = build_filter(
-        daycare_id=body.daycare_id,
         species=species,
         captured_from_ts=_to_ts(body.filters.captured_from) if body.filters else None,
         captured_to_ts=_to_ts(body.filters.captured_to) if body.filters else None,

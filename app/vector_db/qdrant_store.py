@@ -221,14 +221,12 @@ class QdrantStore:
 
 
 def build_filter(
-    daycare_id: str,
+    daycare_id: Optional[str] = None,
     species: Optional[str] = None,
     captured_from_ts: Optional[int] = None,
     captured_to_ts: Optional[int] = None,
 ) -> qm.Filter:
-    must: List[qm.FieldCondition] = [
-        qm.FieldCondition(key="daycare_id", match=qm.MatchValue(value=daycare_id))
-    ]
+    must: List[qm.FieldCondition] = []
 
     if species:
         must.append(qm.FieldCondition(key="species", match=qm.MatchValue(value=species)))

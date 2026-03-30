@@ -2,7 +2,6 @@
 set -euo pipefail
 
 API_BASE="${API_BASE:-http://localhost:8001}"
-DAYCARE_ID="${DAYCARE_ID:-dc_001}"
 DAY="${DAY:-2026-02-13}"
 LIMIT="${LIMIT:-2000}"
 
@@ -33,7 +32,6 @@ get_json() {
 
 echo "== VERIFY START =="
 echo "API_BASE=$API_BASE"
-echo "DAYCARE_ID=$DAYCARE_ID"
 echo "DAY=$DAY"
 
 echo
@@ -45,7 +43,7 @@ python3 -m json.tool "$HEALTH_JSON"
 echo
 echo "[2/5] pets list"
 PETS_JSON="$TMP_DIR/pets.json"
-get_json "/v1/pets?daycare_id=${DAYCARE_ID}" "$PETS_JSON"
+get_json "/v1/pets" "$PETS_JSON"
 python3 -m json.tool "$PETS_JSON"
 
 python3 - <<'PY' "$PETS_JSON"
@@ -66,8 +64,8 @@ echo
 echo "[3/5] images counts by tab"
 ALL_JSON="$TMP_DIR/images_all.json"
 UNL_JSON="$TMP_DIR/images_unl.json"
-get_json "/v1/images?daycare_id=${DAYCARE_ID}&date=${DAY}&tab=ALL&limit=${LIMIT}&offset=0" "$ALL_JSON"
-get_json "/v1/images?daycare_id=${DAYCARE_ID}&date=${DAY}&tab=UNCLASSIFIED&limit=${LIMIT}&offset=0" "$UNL_JSON"
+get_json "/v1/images?date=${DAY}&tab=ALL&limit=${LIMIT}&offset=0" "$ALL_JSON"
+get_json "/v1/images?date=${DAY}&tab=UNCLASSIFIED&limit=${LIMIT}&offset=0" "$UNL_JSON"
 
 python3 - <<'PY' "$ALL_JSON" "$UNL_JSON" "$PETS_JSON"
 import json,sys,urllib.parse,urllib.request
@@ -81,7 +79,6 @@ print(f"UNCLASSIFIED.count={unlj.get('count',0)}")
 
 # PET tab counts
 api_base = __import__('os').environ.get('API_BASE','http://localhost:8001').rstrip('/')
-daycare_id = __import__('os').environ.get('DAYCARE_ID','dc_001')
 day = __import__('os').environ.get('DAY','2026-02-13')
 limit = __import__('os').environ.get('LIMIT','2000')
 
@@ -90,7 +87,6 @@ for p in (pets.get("items") or []):
     if not pid:
         continue
     q=urllib.parse.urlencode({
-        "daycare_id": daycare_id,
         "date": day,
         "tab": "PET",
         "pet_id": pid,
@@ -111,7 +107,7 @@ PY
 echo
 echo "[4/5] buckets"
 BUCKETS_JSON="$TMP_DIR/buckets.json"
-if curl -sS -o "$BUCKETS_JSON" -w "%{http_code}" "${API_BASE}/v1/buckets/${DAYCARE_ID}/${DAY}" | grep -Eq '^[23]'; then
+if curl -sS -o "$BUCKETS_JSON" -w "%{http_code}" "${API_BASE}/v1/buckets/${DAY}" | grep -Eq '^[23]'; then
   python3 -m json.tool "$BUCKETS_JSON"
 else
   echo "buckets not found yet (run finalize first)."

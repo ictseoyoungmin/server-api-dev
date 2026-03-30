@@ -3,7 +3,6 @@ const el = (id) => document.getElementById(id);
 let inspectorResizeObserver = null;
 
 const state = {
-  daycares: [],
   pets: [],
   activePetId: null,
   galleryView: "ALL",
@@ -16,6 +15,7 @@ const state = {
   activeExemplars: [],
   lastBucketManifest: null,
   bucketSummary: null,
+  singleSeedMode: "append",
 };
 
 function nowIso() {
@@ -35,10 +35,6 @@ function value(id) {
   return target ? target.value || "" : "";
 }
 
-function currentDaycare() {
-  return value("workspaceDaycare").trim();
-}
-
 function currentDate() {
   return value("workspaceDate").trim();
 }
@@ -48,11 +44,10 @@ function apiBase() {
 }
 
 function bucketZipHref() {
-  const daycare = currentDaycare();
   const date = currentDate();
-  if (!daycare || !date) return "";
+  if (!date) return "";
   const manifest = state.lastBucketManifest || null;
-  return `${apiBase()}/buckets/${encodeURIComponent(daycare)}/${encodeURIComponent(date)}/zip${toQuery({ manifest })}`;
+  return `${apiBase()}/buckets/${encodeURIComponent(date)}/zip${toQuery({ manifest })}`;
 }
 
 function resetBucketExportState() {
@@ -94,12 +89,6 @@ function toQuery(params) {
   return s ? `?${s}` : "";
 }
 
-function setWorkspaceDaycare(daycareId) {
-  el("workspaceDaycare").value = daycareId;
-  resetBucketExportState();
-  log("Applied daycare", { daycare_id: daycareId });
-}
-
 function selectedImageIds() {
   return Array.from(state.selectedImageIds);
 }
@@ -128,46 +117,6 @@ async function withButtonBusy(button, task) {
   } finally {
     setButtonBusy(button, false);
   }
-}
-
-function renderDaycares() {
-  const list = el("daycareList");
-  list.innerHTML = "";
-  if (!state.daycares.length) {
-    list.innerHTML = '<li><span class="daycare-label">등록된 daycare가 없습니다.</span></li>';
-    return;
-  }
-  state.daycares.forEach((item) => {
-    const li = document.createElement("li");
-    li.innerHTML = `
-      <span class="daycare-label"><code>${item.daycare_id}</code></span>
-      <span class="inline-actions">
-        <button data-act="select" data-id="${item.daycare_id}">적용</button>
-        <button data-act="delete" data-id="${item.daycare_id}" class="danger">삭제</button>
-      </span>
-    `;
-    list.appendChild(li);
-  });
-  list.querySelectorAll("button").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const daycareId = btn.dataset.id;
-      if (btn.dataset.act === "select") {
-        setWorkspaceDaycare(daycareId);
-        await loadWorkspace();
-        return;
-      }
-      if (!confirm(`daycare '${daycareId}' 데이터를 삭제할까요?`)) return;
-      await api(`/daycares/${encodeURIComponent(daycareId)}${toQuery({ delete_qdrant: true, delete_storage: true })}`, {
-        method: "DELETE",
-      });
-      log("Deleted daycare", { daycare_id: daycareId });
-      if (currentDaycare() === daycareId) {
-        el("workspaceDaycare").value = "";
-      }
-      await loadDaycares();
-      await loadQdrantStatus();
-    });
-  });
 }
 
 function renderPetButtons() {
@@ -245,6 +194,50 @@ function petOptionsMarkup(selectedPetId = "") {
     options.push(`<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`);
   });
   return options.join("");
+}
+
+function setSingleSeedMode(mode) {
+  state.singleSeedMode = mode === "create" ? "create" : "append";
+  renderSingleSeedMode();
+}
+
+function renderSingleSeedMode() {
+  const appendButton = el("btnSingleSeedAppendMode");
+  const createButton = el("btnSingleSeedCreateMode");
+  const existingWrap = el("singleSeedExistingWrap");
+  const newWrap = el("singleSeedNewWrap");
+  const existingSelect = el("uExistingPet");
+
+  if (!appendButton || !createButton || !existingWrap || !newWrap || !existingSelect) return;
+
+  existingSelect.innerHTML = petOptionsMarkup();
+
+  const hasPets = state.pets.length > 0;
+  if (!hasPets && state.singleSeedMode === "append") {
+    state.singleSeedMode = "create";
+  }
+
+  appendButton.disabled = !hasPets;
+  appendButton.classList.toggle("is-active", state.singleSeedMode === "append");
+  createButton.classList.toggle("is-active", state.singleSeedMode === "create");
+
+  existingWrap.hidden = state.singleSeedMode !== "append";
+  newWrap.hidden = state.singleSeedMode !== "create";
+}
+
+function explainQuickUploadError(err) {
+  try {
+    const parsed = JSON.parse(String(err?.message || ""));
+    const detail = parsed?.detail;
+    if (detail?.code === "PET_NAME_CONFLICT") {
+      const existing = Array.isArray(detail.existing_pet_ids) ? detail.existing_pet_ids.join(", ") : "";
+      return `${detail.message}${existing ? `\n기존 pet_id: ${existing}` : ""}`;
+    }
+    if (typeof detail === "string") return detail;
+  } catch (_err) {
+    // no-op
+  }
+  return err?.message || "업로드 중 오류가 발생했습니다.";
 }
 
 function clamp01(v) {
@@ -344,17 +337,20 @@ function renderGallery() {
     const score = state.searchScores[item.image_id];
     const petLabel = Array.isArray(item.pet_ids) && item.pet_ids.length > 0 ? item.pet_ids.join(", ") : "미지정";
     const cardState = inferCardState(item);
+    const instanceCount = Number(item.instance_count || 0);
+    const multiplicity = instanceCount > 1 ? "MULTI" : "SINGLE";
     card.innerHTML = `
       <div class="gallery-thumb-wrap">
         <input class="card-check" type="checkbox" ${selected ? "checked" : ""} data-image-id="${item.image_id}" />
         <img class="gallery-thumb" src="${item.thumb_url}" alt="${item.image_id}" loading="lazy" data-inspect="${item.image_id}" />
       </div>
       <div class="card-lines">
-        <div class="inline-actions wrap">
+        <div class="inline-actions wrap card-badges">
           <span class="role-badge">${item.image_role}</span>
           <span class="state-badge ${cardState}">${cardState.toUpperCase()}</span>
-          ${score !== undefined ? `<span class="score-badge">sim ${score.toFixed(2)}</span>` : ""}
         </div>
+        <div class="card-score-row"><span class="multiplicity-badge ${instanceCount > 1 ? "multi" : "single"}">${multiplicity}</span></div>
+        ${score !== undefined ? `<div class="card-score-row"><span class="score-badge">sim ${score.toFixed(2)}</span></div>` : ""}
         <div class="pet-label">${petLabel}</div>
         <div class="pet-sub"><code>${item.image_id}</code></div>
         <div class="instance-meta">instances=${item.instance_count}</div>
@@ -560,7 +556,7 @@ function renderBucketSummary() {
     { label: "자동 확정 수", value: formatCount(quality.accepted_auto_instances) },
   ];
 
-  meta.textContent = `${summary.daycare_id || ""}${summary.date ? ` · ${summary.date}` : ""}${summary.finalized_at ? ` · finalized ${summary.finalized_at}` : ""}`;
+  meta.textContent = `${summary.date ? `${summary.date}` : ""}${summary.finalized_at ? ` · finalized ${summary.finalized_at}` : ""}`;
   pane.className = "bucket-summary-body";
   pane.innerHTML = `
     <div class="bucket-kpi-grid">
@@ -630,6 +626,7 @@ function renderBucketSummary() {
               <tr>
                 <th>버킷</th>
                 <th>이미지 수</th>
+                <th>총 개체 수</th>
               </tr>
             </thead>
             <tbody>
@@ -639,6 +636,7 @@ function renderBucketSummary() {
                   <tr>
                     <td>${escapeHtml(label)}</td>
                     <td>${formatCount(bucket.count)}</td>
+                    <td>${formatCount(bucket.instance_count)}</td>
                   </tr>
                 `;
               }).join("")}
@@ -674,13 +672,6 @@ function clearSelectedImages() {
   renderGallery();
 }
 
-async function loadDaycares() {
-  const data = await api(`/daycares${toQuery({ limit: 200, offset: 0 })}`);
-  state.daycares = data.items || [];
-  renderDaycares();
-  log("Loaded daycares", { count: state.daycares.length });
-}
-
 async function loadQdrantStatus() {
   const data = await api("/health/qdrant");
   const q = data.qdrant || {};
@@ -689,9 +680,7 @@ async function loadQdrantStatus() {
       status: data.status,
       collection: q.collection,
       points_count: q.points_count,
-      sampled_points: q.sampled_points,
-      sampled_with_vector: q.sampled_with_vector,
-      sampled_has_vector: q.sampled_has_vector,
+      total_images: q.total_images,
       sampled_vector_dim: q.sampled_vector_dim,
       status_detail: q.status,
     },
@@ -701,9 +690,7 @@ async function loadQdrantStatus() {
 }
 
 async function loadPets() {
-  const daycare = currentDaycare();
-  if (!daycare) throw new Error("daycare_id를 입력하세요.");
-  const data = await api(`/pets${toQuery({ daycare_id: daycare })}`);
+  const data = await api(`/pets`);
   state.pets = data.items || [];
   if (state.activePetId && !state.pets.find((item) => item.pet_id === state.activePetId)) {
     state.activePetId = null;
@@ -712,6 +699,7 @@ async function loadPets() {
     state.activePetId = state.pets[0].pet_id;
   }
   renderPetButtons();
+  renderSingleSeedMode();
   if (!state.activePetId) {
     state.activeExemplars = [];
     renderActiveExemplars();
@@ -721,26 +709,23 @@ async function loadPets() {
 }
 
 async function loadActiveExemplars() {
-  if (!currentDaycare() || !state.activePetId) {
+  if (!state.activePetId) {
     state.activeExemplars = [];
     renderActiveExemplars();
     return;
   }
   const data = await api(
-    `/exemplars${toQuery({ daycare_id: currentDaycare(), pet_id: state.activePetId, active: true, limit: 30, offset: 0 })}`
+    `/exemplars${toQuery({ pet_id: state.activePetId, active: true, limit: 30, offset: 0 })}`
   );
   state.activeExemplars = data.items || [];
   renderActiveExemplars();
 }
 
 async function loadGallery() {
-  const daycare = currentDaycare();
-  if (!daycare) throw new Error("daycare_id를 입력하세요.");
   if (state.galleryView === "PET" && !state.activePetId) {
     throw new Error("PET bucket view는 pet 버튼 선택 후 사용할 수 있습니다.");
   }
   const params = {
-    daycare_id: daycare,
     date: currentDate() || null,
     tab: currentTabForApi(),
     pet_id: state.galleryView === "PET" ? state.activePetId : null,
@@ -779,8 +764,6 @@ async function refreshInspectorImage() {
 }
 
 async function applyInstanceLabel(instanceId, action, petId = null) {
-  const daycare = currentDaycare();
-  if (!daycare) throw new Error("daycare_id를 입력하세요.");
   const assignments = [{
     instance_id: instanceId,
     action,
@@ -791,7 +774,6 @@ async function applyInstanceLabel(instanceId, action, petId = null) {
   await api("/labels", {
     method: "POST",
     body: JSON.stringify({
-      daycare_id: daycare,
       labeled_by: "admin_dashboard",
       assignments,
     }),
@@ -807,15 +789,14 @@ async function removeInspectorInstance(instanceId) {
 }
 
 async function loadBucketSummary() {
-  const daycare = currentDaycare();
   const date = currentDate();
-  if (!daycare || !date) {
+  if (!date) {
     state.bucketSummary = null;
     renderBucketSummary();
     return;
   }
   try {
-    const data = await api(`/buckets/${encodeURIComponent(daycare)}/${encodeURIComponent(date)}`);
+    const data = await api(`/buckets/${encodeURIComponent(date)}`);
     state.bucketSummary = data;
     state.lastBucketManifest = (String(data.manifest_path || "").split("/").pop() || "").trim() || null;
   } catch (_err) {
@@ -826,20 +807,16 @@ async function loadBucketSummary() {
 }
 
 async function loadWorkspace() {
-  const daycare = currentDaycare();
-  if (!daycare) throw new Error("daycare_id를 입력하세요.");
-  el("workspaceMeta").textContent = `${daycare}${currentDate() ? ` · ${currentDate()}` : ""}`;
+  el("workspaceMeta").textContent = `${currentDate() ? `${currentDate()}` : ""}`;
   await Promise.all([loadPets(), state.activePetId ? loadActiveExemplars() : Promise.resolve()]);
   await Promise.all([loadGallery(), loadBucketSummary()]);
 }
 
 async function autoClassify() {
-  const daycare = currentDaycare();
   const date = currentDate();
-  if (!daycare || !date) throw new Error("자동 분류에는 daycare_id와 date가 모두 필요합니다.");
+  if (!date) throw new Error("자동 분류에는 date가 필요합니다.");
   const autoThreshold = Number(value("autoAcceptThreshold") || 0.6);
   const body = {
-    daycare_id: daycare,
     date,
     auto_accept_threshold: autoThreshold,
     candidate_threshold: autoThreshold,
@@ -852,12 +829,11 @@ async function autoClassify() {
 }
 
 async function finalizeBuckets() {
-  const daycare = currentDaycare();
   const date = currentDate();
-  if (!daycare || !date) throw new Error("버킷 확정에는 daycare_id와 date가 필요합니다.");
+  if (!date) throw new Error("버킷 확정에는 date가 필요합니다.");
   const data = await api("/buckets/finalize", {
     method: "POST",
-    body: JSON.stringify({ daycare_id: daycare, date }),
+    body: JSON.stringify({ date }),
   });
   state.lastBucketManifest = (String(data.manifest_path || "").split("/").pop() || "").trim() || null;
   state.bucketSummary = data;
@@ -892,17 +868,15 @@ async function resolveRepresentativeInstanceIds(imageIds) {
 }
 
 async function runSimilarSearch() {
-  const daycare = currentDaycare();
   const date = currentDate();
   const imageIds = selectedImageIds();
-  if (!daycare || !date) throw new Error("유사 정렬에는 daycare_id와 date가 필요합니다.");
+  if (!date) throw new Error("유사 정렬에는 date가 필요합니다.");
   if (!imageIds.length) throw new Error("유사 정렬 기준 이미지를 1장 이상 선택하세요.");
   const queryInstanceIds = await resolveRepresentativeInstanceIds(imageIds);
   if (!queryInstanceIds.length) throw new Error("선택된 이미지에서 query instance를 찾지 못했습니다.");
   const data = await api("/classify/similar", {
     method: "POST",
     body: JSON.stringify({
-      daycare_id: daycare,
       date,
       tab: currentTabForApi(),
       pet_id: state.galleryView === "PET" ? state.activePetId : null,
@@ -935,16 +909,14 @@ async function runSimilarSearch() {
 }
 
 async function labelSelectedImages(action) {
-  const daycare = currentDaycare();
   const date = currentDate();
   const imageIds = selectedImageIds();
-  if (!daycare || !date) throw new Error("daycare_id와 date가 필요합니다.");
+  if (!date) throw new Error("date가 필요합니다.");
   if (!imageIds.length) throw new Error("먼저 daily 이미지를 선택하세요.");
   if (action === "ACCEPT" && !state.activePetId) throw new Error("포함 작업에는 active pet 선택이 필요합니다.");
   const data = await api("/admin/images/labels", {
     method: "POST",
     body: JSON.stringify({
-      daycare_id: daycare,
       date,
       image_ids: imageIds,
       action,
@@ -960,32 +932,36 @@ async function labelSelectedImages(action) {
 }
 
 async function quickUploadExemplar() {
-  const daycare = currentDaycare();
-  if (!daycare) throw new Error("daycare_id를 입력하세요.");
   const fileInput = el("uFile");
   if (!fileInput.files || !fileInput.files.length) throw new Error("seed 이미지 파일을 선택하세요.");
-  const petName = value("uPetName").trim();
-  if (!petName) throw new Error("pet name을 입력하세요.");
   const fd = new FormData();
-  fd.append("daycare_id", daycare);
-  fd.append("pet_name", petName);
+  if (state.singleSeedMode === "append") {
+    const petId = value("uExistingPet").trim();
+    if (!petId) throw new Error("추가할 기존 pet을 선택하세요.");
+    fd.append("pet_id", petId);
+  } else {
+    const petName = value("uPetName").trim();
+    if (!petName) throw new Error("새 pet name을 입력하세요.");
+    fd.append("pet_name", petName);
+  }
   fd.append("updated_by", "admin_dashboard");
   fd.append("sync_label", "true");
   fd.append("apply_to_all_instances", "false");
   fd.append("file", fileInput.files[0]);
-  const data = await api("/exemplars/upload", { method: "POST", body: fd });
-  log("Quick seed upload done", data);
-  await loadWorkspace();
+  try {
+    const data = await api("/exemplars/upload", { method: "POST", body: fd });
+    log("Quick seed upload done", data);
+    await loadWorkspace();
+  } catch (err) {
+    throw new Error(explainQuickUploadError(err));
+  }
 }
 
 async function folderUploadExemplars() {
-  const daycare = currentDaycare();
-  if (!daycare) throw new Error("daycare_id를 입력하세요.");
   const folderInput = el("fFolder");
   if (!folderInput.files || !folderInput.files.length) throw new Error("pet 폴더를 선택하세요.");
   const fd = new FormData();
-  fd.append("daycare_id", daycare);
-  fd.append("updated_by", "admin_dashboard");
+    fd.append("updated_by", "admin_dashboard");
   fd.append("sync_label", "true");
   fd.append("apply_to_all_instances", "false");
   fd.append("skip_on_error", "true");
@@ -999,16 +975,13 @@ async function folderUploadExemplars() {
 }
 
 async function dailyUploadImages() {
-  const daycare = currentDaycare();
-  if (!daycare) throw new Error("daycare_id를 입력하세요.");
   const input = el("dFiles");
   if (!input.files || !input.files.length) throw new Error("daily 이미지 파일을 선택하세요.");
   let success = 0;
   let failed = 0;
   for (const file of Array.from(input.files)) {
     const fd = new FormData();
-    fd.append("daycare_id", daycare);
-    fd.append("trainer_id", "admin_dashboard");
+        fd.append("trainer_id", "admin_dashboard");
     fd.append("image_role", "DAILY");
     fd.append("file", file);
     try {
@@ -1021,6 +994,34 @@ async function dailyUploadImages() {
   }
   log("Daily upload done", { succeeded: success, failed });
   await loadGallery();
+}
+
+function closeHelpPopovers(exceptId = "") {
+  document.querySelectorAll(".help-trigger").forEach((button) => {
+    const targetId = button.dataset.helpTarget || "";
+    const target = targetId ? el(targetId) : null;
+    const isActive = targetId && targetId === exceptId;
+    button.setAttribute("aria-expanded", isActive ? "true" : "false");
+    if (target) target.hidden = !isActive;
+  });
+}
+
+function bindHelpPopovers() {
+  document.querySelectorAll(".help-trigger").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const targetId = button.dataset.helpTarget || "";
+      const target = targetId ? el(targetId) : null;
+      if (!target) return;
+      const nextOpen = target.hidden;
+      closeHelpPopovers(nextOpen ? targetId : "");
+    });
+  });
+
+  document.addEventListener("click", (event) => {
+    if (event.target.closest(".help-anchor")) return;
+    closeHelpPopovers();
+  });
 }
 
 function bindViewButtons() {
@@ -1051,13 +1052,10 @@ function bootstrapDefaults() {
     zipButton.disabled = false;
     zipButton.type = "button";
   }
+  renderSingleSeedMode();
 }
 
 function bindEvents() {
-  el("workspaceDaycare").addEventListener("input", () => {
-    resetBucketExportState();
-  });
-
   el("workspaceDate").addEventListener("change", () => {
     resetBucketExportState();
   });
@@ -1069,16 +1067,6 @@ function bindEvents() {
     } catch (err) {
       alert(err.message);
       log("Load workspace failed", { error: err.message });
-    }
-  });
-
-  el("btnLoadDaycares").addEventListener("click", async () => {
-    const button = el("btnLoadDaycares");
-    try {
-      await withButtonBusy(button, () => loadDaycares());
-    } catch (err) {
-      alert(err.message);
-      log("Load daycares failed", { error: err.message });
     }
   });
 
@@ -1171,6 +1159,9 @@ function bindEvents() {
     }
   });
 
+  el("btnSingleSeedAppendMode").addEventListener("click", () => setSingleSeedMode("append"));
+  el("btnSingleSeedCreateMode").addEventListener("click", () => setSingleSeedMode("create"));
+
   el("btnQuickUpload").addEventListener("click", async () => {
     const button = el("btnQuickUpload");
     try {
@@ -1202,6 +1193,7 @@ function bindEvents() {
   });
 
   bindViewButtons();
+  bindHelpPopovers();
 }
 
 async function init() {
@@ -1215,7 +1207,6 @@ async function init() {
   syncViewButtons();
   log("Admin workspace ready");
   try {
-    await loadDaycares();
     await loadQdrantStatus();
   } catch (err) {
     log("Initial bootstrap skipped", { error: err.message });

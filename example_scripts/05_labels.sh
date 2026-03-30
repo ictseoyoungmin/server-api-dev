@@ -4,7 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 API_BASE="${API_BASE:-http://localhost:8001}"
-DAYCARE_ID="${DAYCARE_ID:-dc_001}"
 INSTANCE_ID="${INSTANCE_ID:-ins_...}"
 PET_ID="${PET_ID:-pet_aaa}"
 SOURCE="${SOURCE:-MANUAL}"
@@ -32,7 +31,6 @@ fi
 
 cat > /tmp/labels_body.json <<JSON
 {
-  "daycare_id": "${DAYCARE_ID}",
   "assignments": [
     {"instance_id": "${INSTANCE_ID}", "pet_id": "${PET_ID}", "source": "${SOURCE}", "confidence": ${CONFIDENCE}}
   ]

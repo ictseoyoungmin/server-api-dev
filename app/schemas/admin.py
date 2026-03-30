@@ -9,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field
 class AdminImageLabelRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    daycare_id: str
     image_ids: List[str] = Field(min_length=1)
     action: Literal["ACCEPT", "CLEAR", "REJECT"] = "ACCEPT"
     pet_id: Optional[str] = None
@@ -28,7 +27,6 @@ class AdminImageLabelItem(BaseModel):
 
 
 class AdminImageLabelResponse(BaseModel):
-    daycare_id: str
     action: Literal["ACCEPT", "CLEAR", "REJECT"]
     pet_id: Optional[str] = None
     labeled_at: datetime

@@ -99,7 +99,7 @@ def _get_store(request: Request) -> QdrantStore:
 async def ingest(
     request: Request,
     file: UploadFile = File(...),
-    daycare_id: str = Form(...),
+    daycare_id: Optional[str] = Form(default=None),
     trainer_id: Optional[str] = Form(default=None),
     captured_at: Optional[str] = Form(default=None, description="ISO8601 timestamp"),
     image_role: Literal["DAILY", "SEED"] = Form(default="DAILY"),
@@ -127,6 +127,7 @@ async def ingest(
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid captured_at: {captured_at}") from e
 
+    resolved_daycare_id = (daycare_id or "").strip()
     uploaded_at = _utcnow()
     image_id = f"img_{uuid.uuid4().hex}"
 
@@ -210,7 +211,7 @@ async def ingest(
         cap_ts = int((cap_dt or uploaded_at).timestamp())
 
         payload = {
-            "daycare_id": daycare_id,
+            "daycare_id": resolved_daycare_id,
             "trainer_id": trainer_id,
             "image_id": image_id,
             "image_role": image_role,
@@ -267,7 +268,7 @@ async def ingest(
     meta = {
         "image": {
             "image_id": image_id,
-            "daycare_id": daycare_id,
+            "daycare_id": resolved_daycare_id,
             "image_role": image_role,
             "pet_name": pet_name,
             "trainer_id": trainer_id,
@@ -292,7 +293,6 @@ async def ingest(
     return IngestResponse(
         image=ImageMeta(
             image_id=image_id,
-            daycare_id=daycare_id,
             image_role=image_role,
             captured_at=cap_dt,
             uploaded_at=uploaded_at,

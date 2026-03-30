@@ -7,7 +7,6 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 API_BASE="${API_BASE:-http://localhost:8001}"
 IMG="${IMG:-}"
 DEFAULT_IMG="${DEFAULT_IMG:-}"
-DAYCARE_ID="${DAYCARE_ID:-dc_001}"
 TRAINER_ID="${TRAINER_ID:-}"
 CAPTURED_AT="${CAPTURED_AT:-}"
 INCLUDE_EMB="${INCLUDE_EMB:-true}"
@@ -30,7 +29,6 @@ fi
 tmp_body="$(mktemp)"
 http_code="$(curl -sS -o "${tmp_body}" -w "%{http_code}" -X POST "${API_BASE}/v1/ingest?include_embedding=${INCLUDE_EMB}" \
   -F "file=@${IMG}" \
-  -F "daycare_id=${DAYCARE_ID}" \
   $( [ -n "${TRAINER_ID}" ] && echo "-F trainer_id=${TRAINER_ID}" ) \
   $( [ -n "${CAPTURED_AT}" ] && echo "-F captured_at=${CAPTURED_AT}" ))"
 

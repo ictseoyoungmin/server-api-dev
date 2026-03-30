@@ -4,10 +4,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-API_BASE="${API_BASE:-https://dramatic-bargain-ireland-financing.trycloudflare.com}"
+# https://dramatic-bargain-ireland-financing.trycloudflare.com
+API_BASE="${API_BASE:-http://localhost:8001}"
 IMG="${IMG:-}"
 DEFAULT_IMG="${DEFAULT_IMG:-}"
-DAYCARE_ID="${DAYCARE_ID:-dc_t0}"
 CAPTURED_AT="${CAPTURED_AT:-}"
 TOP_K="${TOP_K:-1}"
 STATE_FILE="${STATE_FILE:-${SCRIPT_DIR}/last_identify.json}"
@@ -21,7 +21,7 @@ if [ -z "${IMG}" ] && [ -f "${DEFAULT_IMG}" ]; then
 fi
 
 if [ -z "${IMG}" ] || [ ! -f "${IMG}" ]; then
-  echo "Usage: IMG=/path/to.jpg DAYCARE_ID=dc_t0 bash $0" >&2
+  echo "Usage: IMG=/path/to.jpg bash $0" >&2
   echo "Optional: CAPTURED_AT=2026-03-25T09:00:00+09:00 TOP_K=3" >&2
   echo "Hint: set IMG, or place a file at ${DEFAULT_IMG}" >&2
   exit 1
@@ -30,7 +30,6 @@ fi
 tmp_body="$(mktemp)"
 http_code="$(curl -sS -o "${tmp_body}" -w "%{http_code}" -X POST "${API_BASE}/v1/identify" \
   -F "file=@${IMG}" \
-  -F "daycare_id=${DAYCARE_ID}" \
   -F "top_k=${TOP_K}" \
   $( [ -n "${CAPTURED_AT}" ] && echo "-F captured_at=${CAPTURED_AT}" ))"
 

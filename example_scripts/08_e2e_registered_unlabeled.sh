@@ -5,7 +5,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 API_BASE="${API_BASE:-http://localhost:8001}"
-DAYCARE_ID="${DAYCARE_ID:-dc_001}"
 DAY="${DAY:-2026-02-13}"
 TRAINER_ID="${TRAINER_ID:-trainer_e2e}"
 LABELED_BY="${LABELED_BY:-trainer_e2e}"
@@ -14,7 +13,7 @@ AUTO_ACCEPT_THRESHOLD="${AUTO_ACCEPT_THRESHOLD:-0.78}"
 CANDIDATE_THRESHOLD="${CANDIDATE_THRESHOLD:-0.62}"
 SEARCH_LIMIT="${SEARCH_LIMIT:-200}"
 
-BASE_TEST_DIR="${BASE_TEST_DIR:-${PROJECT_ROOT}/data/images_for_test/${DAYCARE_ID}}"
+BASE_TEST_DIR="${BASE_TEST_DIR:-${PROJECT_ROOT}/data/images_for_test/dc_001}"
 REGISTERED_DIR="${REGISTERED_DIR:-${BASE_TEST_DIR}/registered}"
 UNLABELED_DIR="${UNLABELED_DIR:-${BASE_TEST_DIR}/${DAY}/unlabeled}"
 
@@ -60,7 +59,6 @@ post_ingest() {
   local code
   code="$(curl -sS -o "$out_file" -w "%{http_code}" -X POST "${API_BASE}/v1/ingest?include_embedding=${INCLUDE_EMB}" \
     -F "file=@${img}" \
-    -F "daycare_id=${DAYCARE_ID}" \
     -F "trainer_id=${TRAINER_ID}" \
     -F "captured_at=${captured_at}")"
   if [[ "$code" -lt 200 || "$code" -ge 300 ]]; then
@@ -74,12 +72,11 @@ make_label_body() {
   local instance_id="$1"
   local pet_id="$2"
   local out_file="$3"
-  python3 - <<'PY' "$DAYCARE_ID" "$LABELED_BY" "$instance_id" "$pet_id" "$out_file"
+  python3 - <<'PY' "$LABELED_BY" "$instance_id" "$pet_id" "$out_file"
 import json,sys
 
-daycare_id,labeled_by,instance_id,pet_id,out_file=sys.argv[1:]
+labeled_by,instance_id,pet_id,out_file=sys.argv[1:]
 payload={
-  "daycare_id":daycare_id,
   "labeled_by":labeled_by,
   "assignments":[{
     "instance_id":instance_id,
@@ -96,12 +93,11 @@ PY
 
 make_auto_body() {
   local out_file="$1"
-  python3 - <<'PY' "$DAYCARE_ID" "$DAY" "$AUTO_ACCEPT_THRESHOLD" "$CANDIDATE_THRESHOLD" "$SEARCH_LIMIT" "$out_file"
+  python3 - <<'PY' "$DAY" "$AUTO_ACCEPT_THRESHOLD" "$CANDIDATE_THRESHOLD" "$SEARCH_LIMIT" "$out_file"
 import json,sys
 
-daycare_id,day,aat,ct,limit,out_file=sys.argv[1:]
+day,aat,ct,limit,out_file=sys.argv[1:]
 payload={
-  "daycare_id":daycare_id,
   "date":day,
   "auto_accept_threshold":float(aat),
   "candidate_threshold":float(ct),
@@ -115,12 +111,12 @@ PY
 
 make_finalize_body() {
   local out_file="$1"
-  python3 - <<'PY' "$DAYCARE_ID" "$DAY" "$out_file"
+  python3 - <<'PY' "$DAY" "$out_file"
 import json,sys
 
-daycare_id,day,out_file=sys.argv[1:]
+day,out_file=sys.argv[1:]
 with open(out_file,"w",encoding="utf-8") as f:
-  json.dump({"daycare_id":daycare_id,"date":day},f,ensure_ascii=False)
+  json.dump({"date":day},f,ensure_ascii=False)
 PY
 }
 
@@ -163,7 +159,6 @@ split_pet_folder() {
 
 echo "== E2E START =="
 echo "API_BASE=$API_BASE"
-echo "DAYCARE_ID=$DAYCARE_ID"
 echo "DAY=$DAY"
 echo "REGISTERED_DIR=$REGISTERED_DIR"
 echo "UNLABELED_DIR=$UNLABELED_DIR"

@@ -13,6 +13,5 @@ class PetListItem(BaseModel):
 
 
 class PetsListResponse(BaseModel):
-    daycare_id: str
     count: int
     items: List[PetListItem]

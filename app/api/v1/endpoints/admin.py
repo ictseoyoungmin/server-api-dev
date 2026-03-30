@@ -187,7 +187,6 @@ async def label_images(request: Request, body: AdminImageLabelRequest):
     else:
         from_ts, to_ts = None, None
     query_filter = build_filter(
-        daycare_id=body.daycare_id,
         captured_from_ts=from_ts,
         captured_to_ts=to_ts,
     )
@@ -246,7 +245,6 @@ async def label_images(request: Request, body: AdminImageLabelRequest):
         await run_in_threadpool(_sync_meta_sidecars, meta_sync_payloads)
 
     return AdminImageLabelResponse(
-        daycare_id=body.daycare_id,
         action=body.action,
         pet_id=body.pet_id,
         labeled_at=now,

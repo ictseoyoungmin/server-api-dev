@@ -58,7 +58,6 @@ def _build_item(meta: dict) -> GalleryImageItem:
     )
     return GalleryImageItem(
         image_id=str(img.get("image_id")),
-        daycare_id=str(img.get("daycare_id")),
         image_role=image_role,
         trainer_id=img.get("trainer_id"),
         captured_at=img.get("captured_at"),
@@ -82,15 +81,6 @@ def _read_meta_safe(image_id: str) -> Optional[dict]:
         return None
 
 
-def _meta_day_utc(meta: dict) -> str:
-    img = meta.get("image") or {}
-    ts = img.get("captured_at_ts") or img.get("uploaded_at_ts")
-    try:
-        return datetime.fromtimestamp(int(ts), tz=timezone.utc).date().isoformat()
-    except Exception:
-        return ""
-
-
 def _is_unclassified(meta: dict) -> bool:
     instances = meta.get("instances") or []
     if not instances:
@@ -100,15 +90,6 @@ def _is_unclassified(meta: dict) -> bool:
             continue
         return True
     return False
-
-
-def _matches_tab(meta: dict, tab: Literal["ALL", "UNCLASSIFIED", "PET"], pet_id: Optional[str]) -> bool:
-    if tab == "ALL":
-        return True
-    if tab == "UNCLASSIFIED":
-        return _is_unclassified(meta)
-    instances = meta.get("instances") or []
-    return any((i.get("assignment_status") == "ACCEPTED") and (i.get("pet_id") == pet_id) for i in instances)
 
 
 def _is_seed_image(meta: dict) -> bool:
@@ -147,7 +128,6 @@ def _build_item_from_db(image_id: str, agg: dict, meta: Optional[dict]) -> Galle
 
     return GalleryImageItem(
         image_id=image_id,
-        daycare_id=str(agg.get("daycare_id") or ""),
         image_role=str(agg.get("image_role") or "DAILY"),
         trainer_id=agg.get("trainer_id"),
         captured_at=captured_at,
@@ -164,7 +144,6 @@ def _build_item_from_db(image_id: str, agg: dict, meta: Optional[dict]) -> Galle
 @router.get("/images", response_model=ImagesListResponse)
 async def list_images(
     request: Request,
-    daycare_id: str = Query(...),
     date: Optional[str] = Query(default=None, description="Business timezone date filter (YYYY-MM-DD)"),
     tab: Literal["ALL", "UNCLASSIFIED", "PET"] = Query(default="ALL"),
     pet_id: Optional[str] = Query(default=None),
@@ -172,7 +151,6 @@ async def list_images(
     limit: int = Query(default=200, ge=1, le=2000),
     offset: int = Query(default=0, ge=0),
 ):
-    """List images using Qdrant payload as source-of-truth."""
     if date:
         try:
             day_obj = datetime.strptime(date, "%Y-%m-%d").date()
@@ -189,7 +167,7 @@ async def list_images(
     if day_obj is not None:
         from_ts, to_ts = _day_range_ts(day_obj)
 
-    qf = build_filter(daycare_id=daycare_id, captured_from_ts=from_ts, captured_to_ts=to_ts)
+    qf = build_filter(captured_from_ts=from_ts, captured_to_ts=to_ts)
     points = await run_in_threadpool(store.scroll_points, qf, 1000, False)
 
     by_image: Dict[str, dict] = {}
@@ -209,7 +187,6 @@ async def list_images(
             image_id,
             {
                 "image_id": image_id,
-                "daycare_id": daycare_id,
                 "image_role": image_role,
                 "trainer_id": payload.get("trainer_id"),
                 "captured_at_ts": payload.get("captured_at_ts"),
@@ -249,7 +226,7 @@ async def list_images(
         meta = _read_meta_safe(str(e["image_id"]))
         items.append(_build_item_from_db(str(e["image_id"]), e, meta))
 
-    return ImagesListResponse(daycare_id=daycare_id, count=len(items), items=items)
+    return ImagesListResponse(count=len(items), items=items)
 
 
 @router.get("/images/{image_id}")
@@ -257,50 +234,41 @@ def get_image(
     image_id: str,
     variant: str = Query(default="raw", description="raw|thumb"),
 ):
-    """Serve raw or thumbnail image bytes."""
-
     meta = _read_meta(image_id)
     img = meta.get("image") or {}
-    variant = variant.lower()
-    if variant not in ("raw", "thumb"):
-        raise HTTPException(status_code=400, detail="variant must be raw or thumb")
-
-    path_str = img.get("raw_path") if variant == "raw" else img.get("thumb_path")
-    if not path_str:
-        raise HTTPException(status_code=404, detail="Image file path not found")
-    p = Path(path_str)
-    if not p.exists():
+    if variant == "thumb":
+        path = img.get("thumb_path")
+    else:
+        path = img.get("raw_path")
+    if not path:
         raise HTTPException(status_code=404, detail="Image file not found")
-
+    p = Path(str(path))
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Image file missing on disk")
     media_type, _ = mimetypes.guess_type(str(p))
-    return FileResponse(path=p, media_type=media_type or "application/octet-stream")
+    return FileResponse(p, media_type=media_type or "application/octet-stream")
 
 
 @router.get("/images/{image_id}/meta", response_model=ImageMetaResponse)
 def get_image_meta(image_id: str):
     meta = _read_meta(image_id)
     item = _build_item(meta)
-
-    insts_out: List[InstanceOut] = []
-    for i in meta.get("instances") or []:
-        bb = i.get("bbox") or {}
-        bbox_obj: Optional[BBox] = None
-        if isinstance(bb, dict) and all(k in bb for k in ("x1", "y1", "x2", "y2")):
-            bbox_obj = BBox(**bb)
-        if bbox_obj is None:
-            continue
-
-        insts_out.append(
+    instances = []
+    for x in meta.get("instances") or []:
+        bb = x.get("bbox") or {}
+        instances.append(
             InstanceOut(
-                instance_id=str(i.get("instance_id")),
-                class_id=int(i.get("class_id") or 0),
-                species=str(i.get("species") or "UNKNOWN"),
-                confidence=float(i.get("confidence") or 0.0),
-                bbox=bbox_obj,
-                pet_id=i.get("pet_id"),
-                embedding=None,
-                embedding_meta=None,
+                instance_id=str(x.get("instance_id")),
+                class_id=int(x.get("class_id") or 0),
+                species=str(x.get("species") or "UNKNOWN"),
+                confidence=float(x.get("confidence") or 0.0),
+                bbox=BBox(
+                    x1=float(bb.get("x1") or 0.0),
+                    y1=float(bb.get("y1") or 0.0),
+                    x2=float(bb.get("x2") or 0.0),
+                    y2=float(bb.get("y2") or 0.0),
+                ),
+                pet_id=(str(x.get("pet_id")) if x.get("pet_id") is not None else None),
             )
         )
-
-    return ImageMetaResponse(image=item, instances=insts_out)
+    return ImageMetaResponse(image=item, instances=instances)

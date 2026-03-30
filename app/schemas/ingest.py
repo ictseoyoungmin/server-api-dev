@@ -15,7 +15,6 @@ class BBox(BaseModel):
 
 class ImageMeta(BaseModel):
     image_id: str
-    daycare_id: str
     image_role: Literal["DAILY", "SEED"] = "DAILY"
     captured_at: Optional[datetime] = None
     uploaded_at: datetime

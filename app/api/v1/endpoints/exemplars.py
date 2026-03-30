@@ -20,9 +20,13 @@ from app.schemas.exemplars import (
     ExemplarQuickRegisterResponse,
     ExemplarUpdateRequest,
 )
+from app.utils.pet_registry import allocate_pet_id, ensure_pet_mapping, find_pet_ids_by_name, get_pet_name, read_pet_name_map
 from app.vector_db.qdrant_store import PointRecord, QdrantStore
 
 router = APIRouter()
+
+_DUPLICATE_NAME_GUIDE = "이미 존재하는 pet 이름이면 고유 pet_id를 만들기 위해 -2, -3 형식의 suffix가 자동 부여됩니다."
+_CONFLICT_MESSAGE = "이미 존재하는 pet 이름입니다. 기존 pet에 추가하거나 다른 이름을 입력하세요."
 
 
 def _utcnow() -> datetime:
@@ -64,7 +68,6 @@ def _to_exemplar_item(store: QdrantStore, p: PointRecord) -> ExemplarItem:
 
     return ExemplarItem(
         instance_id=str(instance_id),
-        daycare_id=str(payload.get("daycare_id") or ""),
         image_id=(str(payload.get("image_id")) if payload.get("image_id") is not None else None),
         species=(str(payload.get("species")) if payload.get("species") is not None else None),
         pet_id=str(payload.get("seed_pet_id") or ""),
@@ -82,9 +85,8 @@ def _to_exemplar_item(store: QdrantStore, p: PointRecord) -> ExemplarItem:
     )
 
 
-def _seed_filter(daycare_id: str, pet_id: Optional[str], active: Optional[bool]) -> qm.Filter:
+def _seed_filter(pet_id: Optional[str], active: Optional[bool]) -> qm.Filter:
     must: List[qm.FieldCondition] = [
-        qm.FieldCondition(key="daycare_id", match=qm.MatchValue(value=daycare_id)),
         qm.FieldCondition(key="is_seed", match=qm.MatchValue(value=True)),
     ]
     if pet_id:
@@ -95,17 +97,16 @@ def _seed_filter(daycare_id: str, pet_id: Optional[str], active: Optional[bool])
 
 
 def _pet_id_from_name(pet_name: str) -> str:
-    # Assumption for quick mode: pet names are globally unique and can be used as IDs.
-    pet_id = pet_name.strip()
-    if not pet_id:
+    pet_name = pet_name.strip()
+    if not pet_name:
         raise HTTPException(status_code=400, detail="pet_name is required")
-    return pet_id
+    try:
+        return allocate_pet_id(pet_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _pet_name_from_relative_path(relative_path: str) -> str:
-    # Supports either:
-    # - root/pet_name/file.jpg
-    # - pet_name/file.jpg
     parts = [p for p in str(relative_path).replace("\\", "/").split("/") if p]
     if len(parts) < 2:
         raise ValueError(f"Invalid relative path: {relative_path}")
@@ -118,7 +119,7 @@ async def _register_exemplar_from_uploaded_file(
     request: Request,
     store: QdrantStore,
     file: UploadFile,
-    daycare_id: str,
+    pet_id: str,
     pet_name: str,
     updated_by: Optional[str],
     trainer_id: Optional[str],
@@ -126,28 +127,29 @@ async def _register_exemplar_from_uploaded_file(
     sync_label: bool,
     apply_to_all_instances: bool,
 ) -> tuple[str, str, str, List[ExemplarItem]]:
-    pet_id = _pet_id_from_name(pet_name)
+    pet_name_clean = pet_name.strip()
+    pet_id = str(pet_id or "").strip()
+    if not pet_id:
+        raise HTTPException(status_code=400, detail="pet_id is required")
+    ensure_pet_mapping(pet_id, pet_name_clean)
     now = _utcnow()
     now_ts = int(now.timestamp())
 
     ingest_resp = await ingest_image(
         request=request,
         file=file,
-        daycare_id=daycare_id,
+        daycare_id=None,
         trainer_id=trainer_id,
         captured_at=captured_at,
         image_role="SEED",
-        pet_name=pet_name,
+        pet_name=pet_name_clean,
         include_embedding=False,
     )
     instances = list(ingest_resp.instances or [])
     if not instances:
         raise HTTPException(status_code=400, detail="No detected instances in uploaded image")
 
-    if apply_to_all_instances:
-        selected = instances
-    else:
-        selected = [max(instances, key=lambda x: float(x.confidence))]
+    selected = instances if apply_to_all_instances else [max(instances, key=lambda x: float(x.confidence))]
 
     updates: Dict[str, dict] = {}
     for inst in selected:
@@ -161,6 +163,7 @@ async def _register_exemplar_from_uploaded_file(
             "seed_created_by": updated_by,
             "seed_updated_at_ts": now_ts,
             "seed_updated_by": updated_by,
+            "pet_name": pet_name_clean,
         }
         if sync_label:
             payload.update(
@@ -181,13 +184,41 @@ async def _register_exemplar_from_uploaded_file(
     updated_points = await run_in_threadpool(store.retrieve_points, updates.keys(), False)
     items = [_to_exemplar_item(store, p) for p in updated_points.values()]
     items.sort(key=lambda x: x.instance_id)
-    return pet_id, pet_name.strip(), str(ingest_resp.image.image_id), items
+    return pet_id, pet_name_clean, str(ingest_resp.image.image_id), items
+
+
+def _resolve_quick_upload_target(pet_id: Optional[str], pet_name: Optional[str]) -> tuple[str, str, str]:
+    pet_id_clean = str(pet_id or "").strip()
+    pet_name_clean = str(pet_name or "").strip()
+
+    if bool(pet_id_clean) == bool(pet_name_clean):
+        raise HTTPException(status_code=400, detail="Provide exactly one of pet_id or pet_name")
+
+    if pet_id_clean:
+        existing_name = get_pet_name(pet_id_clean)
+        if not existing_name:
+            raise HTTPException(status_code=404, detail="pet_id not found")
+        return "append", pet_id_clean, existing_name
+
+    conflicts = find_pet_ids_by_name(pet_name_clean)
+    if conflicts:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PET_NAME_CONFLICT",
+                "message": _CONFLICT_MESSAGE,
+                "pet_name": pet_name_clean,
+                "existing_pet_ids": conflicts,
+            },
+        )
+
+    created_pet_id = _pet_id_from_name(pet_name_clean)
+    return "create", created_pet_id, pet_name_clean
 
 
 @router.get("/exemplars", response_model=ExemplarListResponse)
 async def list_exemplars(
     request: Request,
-    daycare_id: str = Query(...),
     pet_id: Optional[str] = Query(default=None),
     species: Optional[str] = Query(default=None),
     active: Optional[bool] = Query(default=True),
@@ -196,7 +227,8 @@ async def list_exemplars(
     offset: int = Query(default=0, ge=0),
 ):
     store = _get_store(request)
-    points = await run_in_threadpool(store.scroll_points, _seed_filter(daycare_id, pet_id, active), 1000, False)
+    points = await run_in_threadpool(store.scroll_points, _seed_filter(pet_id, active), 1000, False)
+    pet_name_map = read_pet_name_map()
 
     items = [_to_exemplar_item(store, p) for p in points]
     if species:
@@ -211,6 +243,7 @@ async def list_exemplars(
             or (needle in (x.image_id or "").lower())
             or (needle in (x.note or "").lower())
             or (needle in x.pet_id.lower())
+            or (needle in pet_name_map.get(x.pet_id, "").lower())
         ]
 
     items.sort(
@@ -222,7 +255,7 @@ async def list_exemplars(
         reverse=False,
     )
     sliced = items[offset : offset + limit]
-    return ExemplarListResponse(daycare_id=daycare_id, count=len(sliced), items=sliced)
+    return ExemplarListResponse(count=len(sliced), items=sliced)
 
 
 @router.post("/exemplars", response_model=ExemplarMutationResponse)
@@ -244,14 +277,9 @@ async def create_exemplars(request: Request, body: ExemplarCreateRequest):
         p = points.get(key)
         if p is None:
             continue
-        payload = p.payload or {}
-        point_daycare_id = str(payload.get("daycare_id") or "")
-        if point_daycare_id != body.daycare_id:
-            raise HTTPException(
-                status_code=400,
-                detail=f"instance {key} belongs to daycare_id={point_daycare_id}, not {body.daycare_id}",
-            )
 
+        ensure_pet_mapping(item.pet_id, item.pet_id)
+        payload = p.payload or {}
         new_payload = {
             "is_seed": True,
             "seed_pet_id": item.pet_id,
@@ -282,35 +310,32 @@ async def create_exemplars(request: Request, body: ExemplarCreateRequest):
     updated_points = await run_in_threadpool(store.retrieve_points, updates.keys(), False)
     items = [_to_exemplar_item(store, p) for p in updated_points.values()]
     items.sort(key=lambda x: x.instance_id)
-    return ExemplarMutationResponse(daycare_id=body.daycare_id, updated_at=now, count=len(items), items=items)
+    return ExemplarMutationResponse(updated_at=now, count=len(items), items=items)
 
 
 @router.post("/exemplars/upload", response_model=ExemplarQuickRegisterResponse)
 async def upload_exemplar_quick(
     request: Request,
     file: UploadFile = File(...),
-    daycare_id: Optional[str] = Form(default=None),
-    daycare_id_alt: Optional[str] = Form(default=None, alias="daycareId"),
-    pet_name: str = Form(...),
+    pet_id: Optional[str] = Form(default=None),
+    pet_name: Optional[str] = Form(default=None),
     updated_by: Optional[str] = Form(default=None),
     trainer_id: Optional[str] = Form(default=None),
     captured_at: Optional[str] = Form(default=None),
     sync_label: bool = Form(default=True),
     apply_to_all_instances: bool = Form(default=False),
 ):
-    """Quick admin flow: upload image + pet name, then ingest and register exemplar(s)."""
-    resolved_daycare_id = (daycare_id or daycare_id_alt or "").strip()
-    if not resolved_daycare_id:
-        raise HTTPException(status_code=400, detail="daycare_id is required")
-
+    """Quick admin flow: upload one seed image either for a new pet or append it to an existing pet."""
     now = _utcnow()
     store = _get_store(request)
-    pet_id, pet_name_clean, image_id, items = await _register_exemplar_from_uploaded_file(
+    mode, resolved_pet_id, resolved_pet_name, image_id, items = None, None, None, None, None
+    mode, resolved_pet_id, resolved_pet_name = _resolve_quick_upload_target(pet_id, pet_name)
+    resolved_pet_id, resolved_pet_name, image_id, items = await _register_exemplar_from_uploaded_file(
         request=request,
         store=store,
         file=file,
-        daycare_id=resolved_daycare_id,
-        pet_name=pet_name,
+        pet_id=resolved_pet_id,
+        pet_name=resolved_pet_name,
         updated_by=updated_by,
         trainer_id=trainer_id,
         captured_at=captured_at,
@@ -319,13 +344,14 @@ async def upload_exemplar_quick(
     )
 
     return ExemplarQuickRegisterResponse(
-        daycare_id=resolved_daycare_id,
-        pet_id=pet_id,
-        pet_name=pet_name_clean,
+        mode=mode,
+        pet_id=resolved_pet_id,
+        pet_name=resolved_pet_name,
         image_id=image_id,
         updated_at=now,
         count=len(items),
         items=items,
+        message=("기존 pet에 seed exemplar를 추가했습니다." if mode == "append" else "새 pet seed exemplar를 등록했습니다."),
     )
 
 
@@ -334,8 +360,6 @@ async def upload_exemplar_folder(
     request: Request,
     files: List[UploadFile] = File(...),
     relative_paths: List[str] = Form(...),
-    daycare_id: Optional[str] = Form(default=None),
-    daycare_id_alt: Optional[str] = Form(default=None, alias="daycareId"),
     updated_by: Optional[str] = Form(default=None),
     trainer_id: Optional[str] = Form(default=None),
     captured_at: Optional[str] = Form(default=None),
@@ -349,9 +373,6 @@ async def upload_exemplar_folder(
     - root/pet_name/image.ext
     - pet_name/image.ext
     """
-    resolved_daycare_id = (daycare_id or daycare_id_alt or "").strip()
-    if not resolved_daycare_id:
-        raise HTTPException(status_code=400, detail="daycare_id is required")
     if len(files) != len(relative_paths):
         raise HTTPException(status_code=400, detail="files and relative_paths count mismatch")
 
@@ -364,11 +385,12 @@ async def upload_exemplar_folder(
     for upload, rel_path in zip(files, relative_paths):
         try:
             pet_name = _pet_name_from_relative_path(rel_path)
+            pet_id = _pet_id_from_name(pet_name)
             pet_id, _pet_name_clean, image_id, items = await _register_exemplar_from_uploaded_file(
                 request=request,
                 store=store,
                 file=upload,
-                daycare_id=resolved_daycare_id,
+                pet_id=pet_id,
                 pet_name=pet_name,
                 updated_by=updated_by,
                 trainer_id=trainer_id,
@@ -400,12 +422,12 @@ async def upload_exemplar_folder(
                 raise HTTPException(status_code=400, detail=f"Failed at {rel_path}: {e}") from e
 
     return ExemplarFolderUploadResponse(
-        daycare_id=resolved_daycare_id,
         updated_at=now,
         total_files=len(files),
         succeeded=succeeded,
         failed=failed,
         results=results,
+        message=_DUPLICATE_NAME_GUIDE,
     )
 
 
@@ -422,8 +444,6 @@ async def update_exemplar(request: Request, instance_id: str, body: ExemplarUpda
         raise HTTPException(status_code=404, detail="instance not found")
 
     payload = point.payload or {}
-    if str(payload.get("daycare_id") or "") != body.daycare_id:
-        raise HTTPException(status_code=400, detail="instance daycare_id mismatch")
     if not bool(payload.get("is_seed", False)):
         raise HTTPException(status_code=400, detail="instance is not an exemplar")
 
@@ -432,6 +452,7 @@ async def update_exemplar(request: Request, instance_id: str, body: ExemplarUpda
         "seed_updated_by": body.updated_by,
     }
     if body.pet_id is not None:
+        ensure_pet_mapping(body.pet_id, body.pet_id)
         patch["seed_pet_id"] = body.pet_id
     if body.note is not None:
         patch["seed_note"] = body.note
@@ -459,14 +480,13 @@ async def update_exemplar(request: Request, instance_id: str, body: ExemplarUpda
     if item is None:
         raise HTTPException(status_code=404, detail="instance not found after update")
     exemplar = _to_exemplar_item(store, item)
-    return ExemplarMutationResponse(daycare_id=body.daycare_id, updated_at=now, count=1, items=[exemplar])
+    return ExemplarMutationResponse(updated_at=now, count=1, items=[exemplar])
 
 
 @router.delete("/exemplars/{instance_id}", response_model=ExemplarMutationResponse)
 async def delete_exemplar(
     request: Request,
     instance_id: str,
-    daycare_id: str = Query(...),
     updated_by: Optional[str] = Query(default=None),
 ):
     store = _get_store(request)
@@ -477,10 +497,6 @@ async def delete_exemplar(
     point = points.get(key)
     if point is None:
         raise HTTPException(status_code=404, detail="instance not found")
-
-    payload = point.payload or {}
-    if str(payload.get("daycare_id") or "") != daycare_id:
-        raise HTTPException(status_code=400, detail="instance daycare_id mismatch")
 
     patch = {
         "is_seed": False,
@@ -493,4 +509,4 @@ async def delete_exemplar(
     }
     await run_in_threadpool(store.set_payload, [key], patch)
 
-    return ExemplarMutationResponse(daycare_id=daycare_id, updated_at=now, count=0, items=[])
+    return ExemplarMutationResponse(updated_at=now, count=0, items=[])

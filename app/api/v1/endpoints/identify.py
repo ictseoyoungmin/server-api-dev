@@ -12,7 +12,6 @@ from starlette.concurrency import run_in_threadpool
 
 from app.api.v1.endpoints.ingest import ingest as ingest_image
 from app.api.v1.endpoints.pets import _read_pet_name_map
-from app.core.config import settings
 from app.schemas.identify import IdentifyCandidate, IdentifyResponse
 from app.vector_db.qdrant_store import QdrantStore
 
@@ -40,9 +39,8 @@ def _resolve_captured_at(captured_at: Optional[str]) -> tuple[datetime, str]:
     return now, now.isoformat()
 
 
-def _exemplar_filter(daycare_id: str, species: str) -> qm.Filter:
+def _exemplar_filter(species: str) -> qm.Filter:
     must: List[qm.FieldCondition] = [
-        qm.FieldCondition(key="daycare_id", match=qm.MatchValue(value=daycare_id)),
         qm.FieldCondition(key="is_seed", match=qm.MatchValue(value=True)),
         qm.FieldCondition(key="seed_active", match=qm.MatchValue(value=True)),
     ]
@@ -55,24 +53,16 @@ def _exemplar_filter(daycare_id: str, species: str) -> qm.Filter:
 async def identify(
     request: Request,
     file: UploadFile = File(...),
-    daycare_id: str = Form(...),
     captured_at: Optional[str] = Form(default=None, description="ISO8601 timestamp"),
     top_k: int = Form(default=1, ge=1, le=100),
 ):
-    """
-    Ingest one image and return top-k pet candidates by nearest active exemplars.
-
-    When captured_at is omitted, server receive time is used so downstream date semantics stay stable.
-    """
-
     store = _get_store(request)
-    base_dt, resolved_captured_at = _resolve_captured_at(captured_at)
-    # _query_date = base_dt.astimezone(business_tz()).date()
+    _base_dt, resolved_captured_at = _resolve_captured_at(captured_at)
 
     ingest_resp = await ingest_image(
         request=request,
         file=file,
-        daycare_id=daycare_id,
+        daycare_id=None,
         trainer_id=None,
         captured_at=resolved_captured_at,
         image_role="DAILY",
@@ -94,10 +84,10 @@ async def identify(
         store.search,
         point.vector,
         max(top_k * 10, top_k),
-        _exemplar_filter(daycare_id=daycare_id, species=target.species),
+        _exemplar_filter(species=target.species),
     )
 
-    pet_name_map = _read_pet_name_map(daycare_id)
+    pet_name_map = _read_pet_name_map(None)
     candidates: List[IdentifyCandidate] = []
     seen_pet_ids = set()
 

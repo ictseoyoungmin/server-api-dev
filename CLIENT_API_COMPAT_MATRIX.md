@@ -1,6 +1,6 @@
 # Client API Compatibility Matrix (Verification + Re-ID)
 
-This document defines server-side refactoring boundaries so Android clients can remain unchanged.
+This document records the compatibility impact of the server-side refactor after removing `daycare_id` from the re-id flow.
 
 ## 1) Goal
 
@@ -39,12 +39,12 @@ Re-ID client/admin flows rely on:
 - `POST /v1/classify/similar`
 - `POST /v1/search`
 - `POST /v1/buckets/finalize`
-- `GET /v1/buckets/{daycare_id}/{day}`
+- `GET /v1/buckets/{day}`
 - `GET/POST /v1/exemplars...` (admin)
 
 ### Non-breaking requirements
 
-- Keep query/form/body field names unchanged (`daycare_id`, `date`, `tab`, `pet_id`, etc.).
+- Keep query/form/body field names stable after the migration (`date`, `tab`, `pet_id`, etc.).
 - Preserve tab semantics:
   - daily image tabs must exclude seed images by default.
 - Keep `GET /v1/pets` output model stable (`pet_id`, `pet_name`, `image_count`, `instance_count`).
@@ -52,24 +52,19 @@ Re-ID client/admin flows rely on:
 
 ## 4) Known Risk During Storage Refactor
 
-Current `/v1/pets` behavior includes fallback from `storage_dir/pets` directory scan.
-This can leak legacy pet IDs even after DB/meta reset.
+Current `/v1/pets` behavior is expected to reflect the global pet pool backed by Qdrant payloads and the shared registry.
 
 ### Recommended fix (server-side)
 
-- Replace `storage_dir/pets` fallback with daycare-scoped source only:
-  - primary: Qdrant points filtered by `daycare_id`
-  - optional: explicit daycare-scoped registry file/table
-- Remove global non-daycare fallback entries from `/v1/pets`.
+- Keep `/v1/pets` driven by the global Qdrant payload set plus `data/reid/registry/pets.json`.
+- Avoid reintroducing daycare-scoped fallback logic.
 
 ## 5) Migration Rules (Safe Refactor)
 
-1. Add new storage roots (example):
-   - `data/verification/daycares/{daycare_id}/...`
-   - `data/reid/daycares/{daycare_id}/...`
-2. Keep API handlers returning same schema during migration.
-3. Add backward reader during transition (old path read-only), then remove after data migration.
-4. Keep write target only in new structure.
+1. Keep verification storage unchanged.
+2. Use global re-id storage roots such as `data/reid/images`, `data/reid/meta`, and `data/reid/buckets/{date}`.
+3. Use `data/reid/registry/pets.json` as the shared pet registry.
+4. Keep API handlers aligned with the post-migration schema and route set.
 
 ## 6) Contract Test Checklist
 
@@ -86,11 +81,11 @@ Run these after refactor:
   - Daily ingest appears in `ALL/UNCLASSIFIED`.
   - `POST /v1/classify/auto` assigns labels as before.
   - `POST /v1/buckets/finalize` excludes seed image IDs.
-  - `GET /v1/pets` returns daycare-scoped list without legacy leakage.
+  - `GET /v1/pets` returns the global pet list without legacy leakage.
 
 ## 7) Change Policy
 
-- If endpoint path/method/field names change: client update required.
-- If only server internal folder layout changes: client update not required.
-- For unavoidable API changes, publish `v2` endpoint and keep `v1` compatibility window.
+- Re-id clients must now use the updated `v1` contract without `daycare_id`.
+- Verification clients remain unchanged because their API surface did not move.
+- If another breaking change becomes necessary later, publish a versioned compatibility plan explicitly.
 

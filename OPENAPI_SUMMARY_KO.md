@@ -28,15 +28,13 @@
 ### 앱별 엔드포인트 요약 (빠른 참조)
 
 현재 코드 기준 HTTP 엔드포인트 수:
-- 총 30개 (`GET /` 포함, `/admin` 정적 GUI 제외)
+- 총 28개 (`GET /` 포함, `/admin` 정적 GUI 제외)
 
 | Endpoint | Face Verification 앱 | Semi-Auto Classification 앱 | 비고 |
 | :--- | :---: | :---: | :--- |
 | `GET /` | O | O | 루트 정보 / docs 진입점 안내 |
 | `GET /v1/health` | O | O | 서버 연결/상태 확인 |
-| `GET /v1/health/qdrant` | O | O | Qdrant 컬렉션/포인트/벡터 샘플 상태 |
-| `GET /v1/daycares` | - | O | daycare 목록/요약 조회 (관리자) |
-| `DELETE /v1/daycares/{daycare_id}` | - | O | daycare 단위 DB+스토리지 초기화 (관리자) |
+| `GET /v1/health/qdrant` | O | O | Qdrant 컬렉션/instance 수/이미지 수/벡터 차원 상태 |
 | `POST /v1/embed` | O | (선택) | Verification의 Remote embedding |
 | `POST /v1/embed/batch` | - | - | 운영 플로우보단 도구/테스트 성격 |
 | `POST /v1/ingest` | - | O | 이미지 인입 + 검출 + 임베딩 |
@@ -52,15 +50,15 @@
 | `GET /v1/images` | - | O | 갤러리 조회 |
 | `GET /v1/images/{image_id}` | - | O | 이미지 바이트 조회 |
 | `GET /v1/images/{image_id}/meta` | (선택) O | O | 이미지/instance 메타 조회 |
-| `GET /v1/pets` | (선택) O | O | daycare 기준 pet 목록/통계 |
+| `GET /v1/pets` | (선택) O | O | 전역 pet 목록/통계 |
 | `GET /v1/sync-images` | O | - | Facebank 해시 중복 체크 |
 | `POST /v1/sync-images` | O | - | Facebank 이미지 업로드 |
 | `POST /v1/trials` | O | - | 인증 시도/피드백 업로드 |
 | `POST /v1/classify/auto` | - | O | 자동 분류 |
 | `POST /v1/classify/similar` | - | O | 탭 내 유사 정렬 |
 | `POST /v1/buckets/finalize` | - | O | 일자 버킷 확정 |
-| `GET /v1/buckets/{daycare_id}/{day}` | - | O | 버킷 manifest 조회 |
-| `GET /v1/buckets/{daycare_id}/{day}/zip` | - | O | 버킷 ZIP 다운로드 |
+| `GET /v1/buckets/{day}` | - | O | 버킷 manifest 조회 |
+| `GET /v1/buckets/{day}/zip` | - | O | 버킷 ZIP 다운로드 |
 | `POST /v1/admin/images/labels` | - | O | 관리자용 image_id 단위 bucket 포함/해제/제외 |
 
 ## 1. 루트 / 헬스체크
@@ -104,7 +102,7 @@
 - 모델 미초기화 시 `model`은 `null`일 수 있습니다.
 
 ### `GET /v1/health/qdrant`
-Qdrant 상태 확인 (컬렉션/포인트/벡터 샘플)
+Qdrant 상태 확인 (컬렉션/instance 수/이미지 수/벡터 차원)
 
 사용 앱:
 - 공통 (운영/디버깅)
@@ -115,10 +113,8 @@ Qdrant 상태 확인 (컬렉션/포인트/벡터 샘플)
   "status": "ok",
   "qdrant": {
     "collection": "pet_instances_v1",
-    "points_count": 6,
-    "sampled_points": 6,
-    "sampled_with_vector": 6,
-    "sampled_has_vector": true,
+    "points_count": 21,
+    "total_images": 12,
     "sampled_vector_dim": 2152,
     "status": "green"
   }
@@ -126,8 +122,9 @@ Qdrant 상태 확인 (컬렉션/포인트/벡터 샘플)
 ```
 
 비고:
+- `points_count`는 전체 Qdrant point 수이며, 이 서버에서는 사실상 전체 instance 수로 보면 됩니다.
+- `total_images`는 `data/reid/meta/*.json` 기준 전체 이미지 수입니다.
 - 일부 Qdrant 빌드에서는 `vectors_count`, `indexed_vectors_count`가 `null/0`로 보일 수 있습니다.
-- 실제 벡터 저장 여부는 `sampled_has_vector`, `sampled_with_vector`를 우선 확인하세요.
 
 ## 2. 임베딩 (DB 저장 없음)
 
@@ -220,7 +217,6 @@ Query Parameters:
 
 Form Fields:
 - `file` (required, file)
-- `daycare_id` (required, string)
 - `trainer_id` (optional, string)
 - `captured_at` (optional, string, ISO8601)
 - `image_role` (optional, `DAILY | SEED`, default=`DAILY`)
@@ -235,8 +231,7 @@ Form Fields:
 {
   "image": {
     "image_id": "img_xxx",
-    "daycare_id": "dc_001",
-    "image_role": "DAILY",
+      "image_role": "DAILY",
     "width": 1280,
     "height": 720,
     "storage_path": "data/images/daily/img_xxx.jpg"
@@ -278,7 +273,6 @@ SEED 정책:
 
 Form Fields:
 - `file` (required, file)
-- `daycare_id` (required, string)
 - `captured_at` (optional, string, ISO8601)
 - `top_k` (optional, int, default=`1`, 범위 `1..50`)
 
@@ -327,7 +321,6 @@ Form Fields:
 요청 바디:
 ```json
 {
-  "daycare_id": "dc_001",
   "query": {
     "instance_ids": ["ins_..."],
     "merge": "RRF"
@@ -386,7 +379,6 @@ Form Fields:
 요청 바디 예시:
 ```json
 {
-  "daycare_id": "dc_001",
   "labeled_by": "tester01",
   "assignments": [
     {
@@ -428,7 +420,6 @@ Form Fields:
 - Semi-Auto Classification 앱 (핵심)
 
 Query Parameters:
-- `daycare_id` (required, string)
 - `date` (optional, string): `YYYY-MM-DD` (비즈니스 타임존 기준, 기본 `Asia/Seoul`)
 - `tab` (optional): `ALL | UNCLASSIFIED | PET` (default `ALL`)
 - `pet_id` (optional): `tab=PET`일 때 사용
@@ -439,13 +430,11 @@ Query Parameters:
 응답 예시(축약):
 ```json
 {
-  "daycare_id": "dc_001",
   "count": 2,
   "items": [
     {
       "image_id": "img_...",
-      "daycare_id": "dc_001",
-      "image_role": "DAILY",
+          "image_role": "DAILY",
       "raw_url": "/v1/images/img_xxx?variant=raw",
       "thumb_url": "/v1/images/img_xxx?variant=thumb",
       "instance_count": 3,
@@ -483,8 +472,7 @@ Query Parameters:
 {
   "image": {
     "image_id": "img_...",
-    "daycare_id": "dc_001",
-    "width": 1280,
+      "width": 1280,
     "height": 720,
     "raw_url": "/v1/images/img_xxx?variant=raw",
     "thumb_url": "/v1/images/img_xxx?variant=thumb"
@@ -505,19 +493,17 @@ Query Parameters:
 ## 7. 반려동물 목록 조회
 
 ### `GET /v1/pets`
-등록/라벨된 반려동물 목록 조회 (daycare 기준)
+등록/라벨된 반려동물 목록 조회 (전역 기준)
 
 사용 앱:
 - Semi-Auto Classification 앱 (PET 탭/선택 UI)
 - Face Verification 앱 (선택: 서버 기준 pet 목록 동기화 UI)
 
 Query Parameters:
-- `daycare_id` (required, string)
 
 응답 예시:
 ```json
 {
-  "daycare_id": "dc_001",
   "count": 2,
   "items": [
     {
@@ -531,54 +517,10 @@ Query Parameters:
 ```
 
 비고:
-- `/v1/pets`는 Qdrant payload를 직접 조회해 `pet_id`와 `seed_pet_id`를 집계합니다.
-- `pet_name`은 `shared_storage_dir/registry/pets/{daycare_id}.json` 매핑을 우선 사용합니다.
+- `/v1/pets`는 Qdrant payload를 직접 조회해 전역 `pet_id`와 `seed_pet_id`를 집계합니다.
+- `pet_name`은 `reid_storage_dir/registry/pets.json` 전역 매핑을 우선 사용합니다.
 - Classification 앱에서는 PET 탭/라벨링 대상 선택의 기준 목록으로 사용합니다.
 - Verification 앱에서 사용할 경우, 서버 기준 pet 목록 동기화 UI 용도로만 사용하는 것을 권장합니다.
-
-## 7.1 daycare 목록/초기화 (관리자)
-
-### `GET /v1/daycares`
-Qdrant 기준 daycare 목록/요약 조회
-
-사용 앱:
-- Semi-Auto Classification 관리자 Dashboard
-
-Query Parameters:
-- `q` (optional, string): daycare_id 부분검색
-- `limit` (optional, int, default=200)
-- `offset` (optional, int, default=0)
-
-응답 예시:
-```json
-{
-  "count": 1,
-  "items": [
-    {
-      "daycare_id": "dc_001",
-      "image_count": 18,
-      "instance_count": 25,
-      "seed_image_count": 5,
-      "daily_image_count": 13,
-      "pet_count": 5,
-      "last_captured_at": "2026-03-06T09:00:00Z"
-    }
-  ]
-}
-```
-
-### `DELETE /v1/daycares/{daycare_id}`
-daycare 단위 테스트 초기화 (Qdrant + storage)
-
-사용 앱:
-- Semi-Auto Classification 관리자 Dashboard
-
-Query Parameters:
-- `delete_qdrant` (optional, bool, default=true)
-- `delete_storage` (optional, bool, default=true)
-
-비고:
-- 파괴적 작업이며 복구 불가입니다.
 
 ## 8. 초기 등록 이미지(Exemplar) 관리
 
@@ -589,7 +531,6 @@ Query Parameters:
 - Semi-Auto Classification 관리자 Dashboard (핵심)
 
 Query Parameters:
-- `daycare_id` (required, string)
 - `pet_id` (optional, string)
 - `species` (optional, `DOG | CAT`)
 - `active` (optional, bool, default `true`)
@@ -604,7 +545,11 @@ Query Parameters:
 - 옵션으로 `pet_id`, `assignment_status=ACCEPTED` 라벨 동기화 가능
 
 ### `POST /v1/exemplars/upload`
-빠른 등록 API (이미지 업로드 + pet_name 입력)
+빠른 등록 API (단일 seed 이미지 등록)
+
+요청 모드:
+- `pet_id` 전송: 기존 pet에 exemplar 추가 (`append`)
+- `pet_name` 전송: 새 pet 생성 후 exemplar 등록 (`create`)
 
 핵심 동작:
 - 내부적으로 `ingest` 수행 후 exemplar 등록까지 한 번에 처리
@@ -612,7 +557,9 @@ Query Parameters:
 - `apply_to_all_instances=true` 시 검출된 모든 인스턴스를 등록
 
 비고:
-- quick 모드에서는 `pet_name`을 `pet_id`로 매핑 (이름 중복 없음 가정)
+- `pet_id`와 `pet_name`은 동시에 보내지 않습니다.
+- 이미 존재하는 이름으로 `create`를 시도하면 `409 PET_NAME_CONFLICT`를 반환합니다.
+- 성공 응답에는 `mode=create|append`가 포함됩니다.
 
 ### `POST /v1/exemplars/upload-folder`
 폴더 일괄 등록 API (폴더명 = pet_name)
@@ -620,7 +567,6 @@ Query Parameters:
 요청 방식:
 - `multipart/form-data`
 - `files`(반복), `relative_paths`(반복, files와 동일 순서)
-- `daycare_id` 필수
 
 경로 규칙:
 - `루트/pet_name/파일`
@@ -656,7 +602,6 @@ Query Parameters:
 요청 바디 예시:
 ```json
 {
-  "daycare_id": "dc_001",
   "date": "2026-03-15",
   "image_ids": ["img_a", "img_b"],
   "action": "ACCEPT",
@@ -671,7 +616,6 @@ Query Parameters:
 응답 예시:
 ```json
 {
-  "daycare_id": "dc_001",
   "action": "ACCEPT",
   "pet_id": "pet_pomi",
   "labeled_at": "2026-03-15T10:00:00Z",
@@ -855,7 +799,6 @@ Form Fields:
 - Form Fields: 없음 (JSON Body 사용)
 
 요청 주요 필드:
-- `daycare_id` (string)
 - `date` (date, 비즈니스 타임존 기준; `settings.business_tz`, 기본 `Asia/Seoul`)
 - `species` (optional: `DOG | CAT`)
 - `auto_accept_threshold` (float, default 0.78)
@@ -867,7 +810,6 @@ Form Fields:
 요청 바디 예시:
 ```json
 {
-  "daycare_id": "dc_001",
   "date": "2026-02-13",
   "species": "DOG",
   "auto_accept_threshold": 0.78,
@@ -880,7 +822,7 @@ Form Fields:
 
 응답 주요 필드:
 - `requested_at`
-- `date`, `daycare_id`, `dry_run`
+- `date`, `dry_run`
 - `summary` (`scanned_instances`, `accepted`, `unreviewed_candidate`, ...)
 - `items[]` (`instance_id`, `image_id`, `score`, `selected_pet_id`, `assignment_status`, `updated`)
 
@@ -889,7 +831,6 @@ Form Fields:
 {
   "requested_at": "2026-02-25T10:10:10.100000Z",
   "date": "2026-02-13",
-  "daycare_id": "dc_001",
   "dry_run": false,
   "summary": {
     "scanned_instances": 320,
@@ -922,7 +863,6 @@ Form Fields:
 - Form Fields: 없음 (JSON Body 사용)
 
 요청 주요 필드:
-- `daycare_id` (string)
 - `date` (date, 비즈니스 타임존 기준; `settings.business_tz`, 기본 `Asia/Seoul`)
 - `tab` (`ALL | UNCLASSIFIED | PET`)
 - `pet_id` (optional, `tab=PET`일 때 주로 사용)
@@ -934,7 +874,6 @@ Form Fields:
 요청 바디 예시:
 ```json
 {
-  "daycare_id": "dc_001",
   "date": "2026-02-13",
   "tab": "UNCLASSIFIED",
   "pet_id": null,
@@ -946,7 +885,7 @@ Form Fields:
 ```
 
 응답 주요 필드:
-- `requested_at`, `date`, `daycare_id`, `tab`, `pet_id`
+- `requested_at`, `date`, `tab`, `pet_id`
 - `query_debug`
 - `results[]` (`image_id`, `score`, `best_match_instance_id`, `best_match_score`, `raw_url`, `thumb_url`)
 
@@ -955,7 +894,6 @@ Form Fields:
 {
   "requested_at": "2026-02-25T10:20:20.200000Z",
   "date": "2026-02-13",
-  "daycare_id": "dc_001",
   "tab": "UNCLASSIFIED",
   "pet_id": null,
   "query_debug": {
@@ -989,7 +927,6 @@ Form Fields:
 요청 바디:
 ```json
 {
-  "daycare_id": "dc_001",
   "date": "2026-02-25",
   "pet_ids": ["pet_id_1", "pet_id_2"]
 }
@@ -999,7 +936,6 @@ Form Fields:
 ```json
 {
   "finalized_at": "2026-02-25T12:34:56.789000Z",
-  "daycare_id": "dc_001",
   "date": "2026-02-25",
   "bucket_count": 2,
   "total_images": 3,
@@ -1042,14 +978,13 @@ Form Fields:
 - `images[]`는 ZIP export용 메타(`raw_path`, `original_filename` 등)를 포함합니다.
 - `manifest_path`, `quality_metrics`는 `snake_case` 필드명입니다.
 
-### `GET /v1/buckets/{daycare_id}/{day}`
+### `GET /v1/buckets/{day}`
 저장된 일자 버킷 manifest 조회
 
 사용 앱:
 - Semi-Auto Classification 앱 (핵심)
 
 Path Parameters:
-- `daycare_id` (string)
 - `day` (date, `YYYY-MM-DD`)
 
 Query Parameters:
@@ -1062,9 +997,8 @@ Query Parameters:
 응답 예시(축약):
 ```json
 {
-  "daycare_id": "dc_001",
   "date": "2026-02-13",
-  "manifest_path": "data/buckets/dc_001/2026-02-13/finalize_20260225T101133Z.json",
+  "manifest_path": "data/buckets/2026-02-13/finalize_20260225T101133Z.json",
   "finalized_at": "2026-02-25T10:11:33.000000Z",
   "bucket_count": 3,
   "total_images": 87,
@@ -1100,7 +1034,7 @@ Query Parameters:
 }
 ```
 
-### `GET /v1/buckets/{daycare_id}/{day}/zip`
+### `GET /v1/buckets/{day}/zip`
 저장된 버킷 manifest를 기준으로 ZIP 파일 다운로드
 
 사용 앱:
@@ -1108,7 +1042,6 @@ Query Parameters:
 - for_admin 대시보드의 ZIP 다운로드 버튼과 연결
 
 Path Parameters:
-- `daycare_id` (string)
 - `day` (date, `YYYY-MM-DD`)
 
 Query Parameters:
@@ -1118,6 +1051,7 @@ Query Parameters:
 동작 비고:
 - ZIP 내부 구조는 기본적으로 `{root_folder_name}/{pet_name}/{daily_images}` 입니다.
 - manifest에 `images[]`가 있으면 `raw_path`를 그대로 사용합니다.
+- 응답 전송이 끝나면 생성된 ZIP 임시 파일은 서버에서 삭제됩니다.
 - 예전 manifest처럼 `image_ids[]`만 있어도 서버가 meta를 읽어 `raw_path`를 복원해 압축합니다.
 - `original_filename`이 있으면 ZIP 내부 파일명으로 우선 사용합니다.
 

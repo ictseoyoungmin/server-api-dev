@@ -26,7 +26,6 @@ class SearchFilters(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    daycare_id: str
     query: SearchQuery
     filters: Optional[SearchFilters] = None
     top_k_images: int = Field(default=200, ge=1, le=2000)

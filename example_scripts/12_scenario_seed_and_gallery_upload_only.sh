@@ -2,7 +2,6 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8001/v1}"
-DAYCARE_ID="${DAYCARE_ID:-dc_001}"
 TODAY_UTC="${TODAY_UTC:-$(date -u +%F)}"
 UPDATED_BY="${UPDATED_BY:-scenario_runner}"
 RESET_FIRST="${RESET_FIRST:-true}"
@@ -89,7 +88,6 @@ if [[ ${#seed_files[@]} -eq 0 ]]; then
 fi
 
 form_args=(
-  -F "daycare_id=$DAYCARE_ID"
   -F "updated_by=$UPDATED_BY"
   -F "sync_label=true"
   -F "apply_to_all_instances=false"
@@ -144,7 +142,6 @@ for f in "${daily_files[@]}"; do
   ts="${TODAY_UTC}T09:00:00Z"
   curl -sS -X POST "$BASE_URL/ingest" \
     -F "file=@$f" \
-    -F "daycare_id=$DAYCARE_ID" \
     -F "trainer_id=$UPDATED_BY" \
     -F "captured_at=$ts" \
     -F "image_role=DAILY" \

@@ -1,7 +1,7 @@
 # API Spec (PoC)
 
 Related design:
-- `SEMI_AUTO_CLASSIFICATION_DESIGN.md` (semi-auto daycare workflow extension plan)
+- `SEMI_AUTO_CLASSIFICATION_DESIGN.md` (semi-auto classification workflow extension plan)
 
 Base URL (default):
 - Scripted run: `http://<host>:8001` (see `run_api.sh`)
@@ -30,10 +30,8 @@ Response (example):
   "status": "ok",
   "qdrant": {
     "collection": "pet_instances_v1",
-    "points_count": 6,
-    "sampled_points": 6,
-    "sampled_with_vector": 6,
-    "sampled_has_vector": true,
+    "points_count": 21,
+    "total_images": 12,
     "sampled_vector_dim": 2152,
     "status": "green"
   }
@@ -41,8 +39,9 @@ Response (example):
 ```
 
 Notes:
+- `points_count` is the total Qdrant point count and is effectively the total instance count in this server.
+- `total_images` is computed from `data/reid/meta/*.json`.
 - `vectors_count` / `indexed_vectors_count` may be `null`/`0` on some Qdrant builds.
-- Practical vector-presence check is `sampled_has_vector` + `sampled_with_vector`.
 
 ## 2) Ingest (upload → detect → embed → store)
 `POST /v1/ingest`
@@ -51,7 +50,6 @@ Notes:
 
 Fields:
 - `file` (required) : image
-- `daycare_id` (required) : string
 - `trainer_id` (optional) : string
 - `captured_at` (optional) : ISO8601 string (e.g. `2026-01-31T09:10:11Z`)
 - `image_role` (optional) : `DAILY|SEED` (default `DAILY`)
@@ -77,7 +75,6 @@ Seed policy:
 
 Fields:
 - `file` (required) : image
-- `daycare_id` (required) : string
 - `captured_at` (optional) : ISO8601 string
 - `top_k` (optional, default `1`) : integer (`1..50`)
 
@@ -109,7 +106,7 @@ Response example:
 ```
 
 Notes:
-- Internally this endpoint runs ingest first, then searches active exemplars (`is_seed=true`, `seed_active=true`) by vector similarity.
+- Internally this endpoint runs ingest first, then searches active exemplars (`is_seed=true`, `seed_active=true`) by vector similarity in the global exemplar pool.
 - `captured_at` is optional. When omitted, server receive time is used and passed into ingest.
 - This endpoint does not require a client-supplied `date`.
 - If multiple instances are detected, only the highest-confidence instance is used for candidate search.
@@ -122,7 +119,6 @@ Notes:
 Request:
 ```json
 {
-  "daycare_id": "dc_001",
   "query": {"instance_ids": ["ins_..."], "merge": "RRF"},
   "filters": {"species": "DOG"},
   "top_k_images": 200,
@@ -162,7 +158,6 @@ Notes:
 
 ```json
 {
-  "daycare_id": "dc_001",
   "assignments": [
     {
       "instance_id": "ins_...",
@@ -183,13 +178,11 @@ For this PoC, labels are stored in Qdrant payload (`pet_id`, `label_source`, etc
 
 Note:
 - Label updates also sync corresponding local sidecar meta JSON instance fields.
-- `daycare_id` is currently accepted in the request but not enforced server-side for label writes.
 
 ## 5) Images (gallery)
 `GET /v1/images`
 
 Query:
-- `daycare_id` (required)
 - `date` (optional): `YYYY-MM-DD` (business timezone date filter; default `Asia/Seoul`)
 - `tab` (optional): `ALL | UNCLASSIFIED | PET` (default `ALL`)
 - `pet_id` (required when `tab=PET`)
@@ -214,42 +207,18 @@ Note:
 ## 5.0) Pets (for PET tab selector)
 `GET /v1/pets`
 
-Query:
-- `daycare_id` (required)
-
 Response:
 - `items[]`: `pet_id`, `pet_name`, `image_count`, `instance_count`
 
 Notes:
-- Primary source is Qdrant payload points filtered by `daycare_id` (`pet_id` and `seed_pet_id` aggregation).
-- `pet_name` is resolved from `shared_storage_dir/registry/pets/{daycare_id}.json` when available.
-
-## 5.0.1) Daycares (admin list/reset)
-`GET /v1/daycares`
-
-Query:
-- `limit` (optional, default 200)
-- `offset` (optional, default 0)
-- `q` (optional): daycare_id substring filter
-
-Response:
-- `items[]`: `daycare_id`, `image_count`, `daily_image_count`, `seed_image_count`, `pet_count`, `instance_count`, `last_captured_at`
-
-`DELETE /v1/daycares/{daycare_id}`
-
-Query:
-- `delete_qdrant` (optional, default `true`): delete points in collection by `daycare_id`
-- `delete_storage` (optional, default `true`): delete local sidecars/raw/thumb/buckets for the daycare
-
-Notes:
-- Intended for admin test reset workflow.
-- This operation is destructive and not reversible.
+- Primary source is Qdrant payload points aggregated globally across labeled and seed instances.
+- `pet_name` is resolved from `reid_storage_dir/registry/pets.json` when available.
 
 ## 5.1) Exemplars (initial registration images)
+`GET /v1/exemplars` (initial registration images)
 `GET /v1/exemplars`
 
 Query:
-- `daycare_id` (required)
 - `pet_id` (optional)
 - `species` (optional)
 - `active` (optional, default `true`)
@@ -269,13 +238,18 @@ Purpose:
 
 Purpose:
 - Convenience endpoint for admin dashboard.
-- Upload one image + `pet_name` and perform:
-  1) ingest (detect + embed + store)
-  2) exemplar registration (`is_seed=true`, `seed_pet_id=<pet_name>`)
+- Supports two explicit modes:
+  1) append mode: send `pet_id` to add one seed image to an existing pet
+  2) create mode: send `pet_name` to create a new pet and register its first seed image
 
-Notes:
-- Assumes `pet_name` uniqueness for ID mapping in quick mode.
+Behavior:
+- Internally runs ingest first, then exemplar registration.
 - `apply_to_all_instances=false` (default) registers only the highest-confidence instance.
+- On success, response includes `mode: create | append`.
+
+Conflict behavior:
+- If create mode is requested with an already existing `pet_name`, server returns `409 PET_NAME_CONFLICT`.
+- Clients should then either switch to append mode or enter a different new pet name.
 
 `POST /v1/exemplars/upload-folder`
 
@@ -288,7 +262,6 @@ Purpose:
 Request (`multipart/form-data`):
 - `files` (repeated): image files
 - `relative_paths` (repeated): each file's relative path (same order as `files`)
-- `daycare_id` (required)
 - `sync_label`, `apply_to_all_instances`, `skip_on_error` (optional)
 
 Behavior:
@@ -314,7 +287,6 @@ Purpose:
 Request:
 ```json
 {
-  "daycare_id": "dc_001",
   "date": "2026-03-15",
   "image_ids": ["img_a", "img_b"],
   "action": "ACCEPT",
@@ -335,7 +307,7 @@ Behavior:
 - Label updates are mirrored to local meta sidecars.
 
 Response:
-- `daycare_id`, `action`, `pet_id`, `labeled_at`
+- `action`, `pet_id`, `labeled_at`
 - `items[]`: `image_id`, `selected_instance_ids[]`, `updated_count`, `skipped_reason`
 
 ## 5.2) Auto Classification (date scope)
@@ -345,7 +317,6 @@ Response:
 
 ```json
 {
-  "daycare_id": "dc_001",
   "date": "2026-02-13",
   "auto_accept_threshold": 0.78,
   "candidate_threshold": 0.62,
@@ -357,7 +328,7 @@ Response:
 Behavior:
 - `date` is interpreted in business timezone (`settings.business_tz`, default `Asia/Seoul`).
 - Target: instances on the given date that are not `assignment_status=ACCEPTED` and have no `pet_id`.
-- Exemplar pool: instances explicitly registered as exemplar (`is_seed=true`, `seed_pet_id` set, `seed_active=true`) in the same daycare.
+- Exemplar pool: instances explicitly registered as exemplar (`is_seed=true`, `seed_pet_id` set, `seed_active=true`) in the global pool.
 - Decision:
   - `score >= auto_accept_threshold`: write `pet_id`, `assignment_status=ACCEPTED`
   - `candidate_threshold <= score < auto_accept_threshold`: write candidate only (`auto_pet_id`, `assignment_status=UNREVIEWED`)
@@ -371,7 +342,6 @@ Behavior:
 
 ```json
 {
-  "daycare_id": "dc_001",
   "date": "2026-02-13",
   "tab": "UNCLASSIFIED",
   "include_seed": false,
@@ -400,7 +370,6 @@ Behavior:
 
 ```json
 {
-  "daycare_id": "dc_001",
   "date": "2026-02-13",
   "pet_ids": ["pet_a", "pet_b"]
 }
@@ -411,7 +380,7 @@ Behavior:
 - Scans accepted assignments (`assignment_status=ACCEPTED`) on that day.
 - Builds per-pet daily buckets.
 - Persists manifest JSON under:
-  - `storage_dir/buckets/{daycare_id}/{YYYY-MM-DD}/finalize_*.json`
+  - `storage_dir/buckets/{YYYY-MM-DD}/finalize_*.json`
 - Each bucket contains both:
   - `image_ids[]`
   - `images[]` with per-image export metadata: `image_id`, `file_name`, `original_filename`, `raw_path`, `raw_url`, `captured_at`
@@ -419,7 +388,7 @@ Behavior:
   - `total_day_images`, `unclassified_images`, `unclassified_image_ratio`
   - `total_instances`, `accepted_instances`, `accepted_auto_instances`
   - `unreviewed_instances`, `rejected_instances`, `auto_accept_ratio`
-- `pet_name` is also included when available from daycare pet registry.
+- `pet_name` is also included when available from the global pet registry.
 
 Response bucket item example:
 ```json
@@ -441,7 +410,7 @@ Response bucket item example:
 }
 ```
 
-`GET /v1/buckets/{daycare_id}/{day}`
+`GET /v1/buckets/{day}`
 
 Query:
 - `manifest` (optional): explicit manifest filename. If omitted, latest manifest is returned.
@@ -595,11 +564,12 @@ Storage (PoC):
 - `verification_storage_dir/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.json`
 - `verification_storage_dir/pets/{petId}/{petName}/trials/{YYYY-MM-DD}/{trial_id}.jpg`
 
-`GET /v1/buckets/{daycare_id}/{day}/zip`
+`GET /v1/buckets/{day}/zip`
 
 Purpose:
 - Build and return a ZIP archive from the finalized daily buckets.
 - Archive layout: `{root_folder_name}/{pet_name}/{daily_images}`
+- The generated ZIP is deleted from the server after the response is sent.
 
 Query:
 - `manifest` (optional): specific manifest filename to export
