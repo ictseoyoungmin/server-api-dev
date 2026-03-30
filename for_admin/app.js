@@ -221,7 +221,9 @@ function renderSingleSeedMode() {
   appendButton.classList.toggle("is-active", state.singleSeedMode === "append");
   createButton.classList.toggle("is-active", state.singleSeedMode === "create");
 
-  existingWrap.hidden = state.singleSeedMode !== "append";
+  existingWrap.hidden = false;
+  existingSelect.disabled = !hasPets || state.singleSeedMode === "create";
+  existingWrap.classList.toggle("is-disabled", existingSelect.disabled);
   newWrap.hidden = state.singleSeedMode !== "create";
 }
 
