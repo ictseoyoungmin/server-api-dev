@@ -815,6 +815,7 @@ h2 {
   width: min(1280px, 100%);
   max-height: min(74vh, 920px);
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 14px;
   overflow: hidden;
   box-shadow: 0 28px 60px rgba(35, 24, 10, 0.22);
@@ -1054,9 +1055,11 @@ body.inspector-open {
 
 .detail-body {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 14px;
   overflow: hidden;
   min-height: 0;
+  height: 100%;
   padding-right: 4px;
 }
 
