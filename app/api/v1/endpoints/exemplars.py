@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Optional
+from datetime import datetime, time, timezone
+from typing import Dict, Iterable, List, Literal, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from qdrant_client.http import models as qm
@@ -19,11 +19,14 @@ from app.schemas.exemplars import (
     ExemplarFolderUploadResponse,
     ExemplarItem,
     ExemplarListResponse,
+    ExemplarMoveToDailyRequest,
+    ExemplarMoveToDailyResponse,
     ExemplarMutationResponse,
     ExemplarQuickRegisterResponse,
     ExemplarUpdateRequest,
 )
 from app.utils.pet_registry import allocate_pet_id, ensure_pet_mapping, find_pet_ids_by_name, get_pet_name, read_pet_name_map
+from app.utils.timezone import business_tz
 from app.vector_db.qdrant_store import PointRecord, QdrantStore
 
 router = APIRouter()
@@ -82,6 +85,60 @@ def _delete_file_if_exists(path_value: Optional[object]) -> None:
             path.unlink()
     except Exception:
         return
+
+
+def _move_instance_to_daily_meta(
+    instance_id: str,
+    image_id: Optional[str],
+    assignment_status: Literal["UNREVIEWED", "ACCEPTED"],
+    pet_id: Optional[str],
+    updated_by: Optional[str],
+    now_ts: int,
+    target_captured_at_iso: Optional[str],
+    target_captured_at_ts: Optional[int],
+) -> dict:
+    image_id_clean = str(image_id or "").strip()
+    if not image_id_clean:
+        return {}
+
+    meta_path = _meta_path(image_id_clean)
+    if not meta_path.exists():
+        return {"image_id": image_id_clean, "updated": False}
+
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"image_id": image_id_clean, "updated": False}
+
+    image = meta.get("image") or {}
+    image["image_role"] = "DAILY"
+    if target_captured_at_iso is not None:
+        image["captured_at"] = target_captured_at_iso
+    if target_captured_at_ts is not None:
+        image["captured_at_ts"] = target_captured_at_ts
+    meta["image"] = image
+
+    changed = False
+    for inst in meta.get("instances") or []:
+        if str(inst.get("instance_id") or "") != instance_id:
+            continue
+        inst["pet_id"] = pet_id
+        inst["assignment_status"] = assignment_status
+        inst["label_source"] = "MANUAL" if assignment_status == "ACCEPTED" else None
+        inst["label_confidence"] = 1.0 if assignment_status == "ACCEPTED" else None
+        inst["labeled_at_ts"] = now_ts if assignment_status == "ACCEPTED" else None
+        inst["labeled_by"] = updated_by if assignment_status == "ACCEPTED" else None
+        changed = True
+        break
+
+    if changed:
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    return {
+        "image_id": str(image.get("image_id") or image_id_clean),
+        "updated": changed,
+        "assignment_status": assignment_status,
+        "pet_id": pet_id,
+    }
 
 
 def _remove_instance_from_meta_and_maybe_delete_assets(instance_id: str, image_id: Optional[str]) -> dict:
@@ -274,6 +331,47 @@ async def _register_exemplar_from_uploaded_file(
     return pet_id_clean, pet_name_clean, str(ingest_resp.image.image_id), items
 
 
+def _resolve_folder_upload_target(pet_name: str, existing_name_policy: Literal["append", "create_new", "fail"]) -> tuple[str, str]:
+    pet_name_clean = str(pet_name or "").strip()
+    if not pet_name_clean:
+        raise HTTPException(status_code=400, detail="pet_name is required")
+
+    conflicts = find_pet_ids_by_name(pet_name_clean)
+    if existing_name_policy == "create_new":
+        return _pet_id_from_name(pet_name_clean), pet_name_clean
+
+    if not conflicts:
+        return _pet_id_from_name(pet_name_clean), pet_name_clean
+
+    if existing_name_policy == "fail":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PET_NAME_CONFLICT",
+                "message": "이미 존재하는 pet 이름입니다. 다른 정책을 선택하거나 이름을 바꿔주세요.",
+                "pet_name": pet_name_clean,
+                "existing_pet_ids": conflicts,
+            },
+        )
+
+    exact = next((pet_id for pet_id in conflicts if pet_id == pet_name_clean), None)
+    if exact:
+        return exact, get_pet_name(exact) or pet_name_clean
+    if len(conflicts) == 1:
+        only = conflicts[0]
+        return only, get_pet_name(only) or pet_name_clean
+
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "PET_NAME_AMBIGUOUS",
+            "message": "같은 이름의 기존 pet이 여러 개 있어 자동으로 추가할 수 없습니다. 새 pet 생성 또는 등록 중단 정책을 사용하세요.",
+            "pet_name": pet_name_clean,
+            "existing_pet_ids": conflicts,
+        },
+    )
+
+
 def _resolve_quick_upload_target(pet_id: Optional[str], pet_name: Optional[str]) -> tuple[str, Optional[str], str]:
     pet_id_clean = str(pet_id or "").strip()
     pet_name_clean = str(pet_name or "").strip()
@@ -451,6 +549,7 @@ async def upload_exemplar_folder(
     captured_at: Optional[str] = Form(default=None),
     sync_label: bool = Form(default=True),
     apply_to_all_instances: bool = Form(default=False),
+    existing_name_policy: Literal["append", "create_new", "fail"] = Form(default="append"),
     skip_on_error: bool = Form(default=True),
 ):
     """Batch folder upload for admin dashboard.
@@ -467,17 +566,22 @@ async def upload_exemplar_folder(
     results: List[ExemplarFolderUploadItemResult] = []
     succeeded = 0
     failed = 0
+    resolved_pet_targets: Dict[str, tuple[str, str]] = {}
 
     for upload, rel_path in zip(files, relative_paths):
         try:
             pet_name = _pet_name_from_relative_path(rel_path)
-            pet_id = _pet_id_from_name(pet_name)
+            target = resolved_pet_targets.get(pet_name)
+            if not target:
+                target = _resolve_folder_upload_target(pet_name, existing_name_policy)
+                resolved_pet_targets[pet_name] = target
+            pet_id, resolved_pet_name = target
             pet_id, _pet_name_clean, image_id, items = await _register_exemplar_from_uploaded_file(
                 request=request,
                 store=store,
                 file=upload,
                 pet_id=pet_id,
-                pet_name=pet_name,
+                pet_name=resolved_pet_name,
                 updated_by=updated_by,
                 trainer_id=trainer_id,
                 captured_at=captured_at,
@@ -488,9 +592,10 @@ async def upload_exemplar_folder(
             results.append(
                 ExemplarFolderUploadItemResult(
                     relative_path=rel_path,
-                    pet_name=pet_name,
+                    pet_name=resolved_pet_name,
                     pet_id=pet_id,
                     image_id=image_id,
+                    img_name=(upload.filename or None),
                     registered_instances=len(items),
                     status="ok",
                 )
@@ -500,6 +605,7 @@ async def upload_exemplar_folder(
             results.append(
                 ExemplarFolderUploadItemResult(
                     relative_path=rel_path,
+                    pet_name=(_pet_name_from_relative_path(rel_path) if rel_path else None),
                     status="failed",
                     error=str(e),
                 )
@@ -513,7 +619,7 @@ async def upload_exemplar_folder(
         succeeded=succeeded,
         failed=failed,
         results=results,
-        message=_DUPLICATE_NAME_GUIDE,
+        message=f"중복 이름 정책: {existing_name_policy}",
     )
 
 
@@ -567,6 +673,93 @@ async def update_exemplar(request: Request, instance_id: str, body: ExemplarUpda
         raise HTTPException(status_code=404, detail="instance not found after update")
     exemplar = _to_exemplar_item(store, item)
     return ExemplarMutationResponse(updated_at=now, count=1, items=[exemplar])
+
+
+@router.post("/exemplars/{instance_id}/move-to-daily", response_model=ExemplarMoveToDailyResponse)
+async def move_exemplar_to_daily(request: Request, instance_id: str, body: ExemplarMoveToDailyRequest):
+    store = _get_store(request)
+    now = _utcnow()
+    now_ts = int(now.timestamp())
+
+    points = await run_in_threadpool(store.retrieve_points, [instance_id], False)
+    key = store.external_instance_id(instance_id)
+    point = points.get(key)
+    if point is None:
+        raise HTTPException(status_code=404, detail="instance not found")
+
+    payload = point.payload or {}
+    if not bool(payload.get("is_seed", False)):
+        raise HTTPException(status_code=400, detail="instance is not an exemplar")
+
+    source_pet_id = str(payload.get("seed_pet_id") or "").strip() or None
+    assignment_status = "UNREVIEWED"
+    target_pet_id = None
+    target_captured_at_iso = None
+    target_captured_at_ts = None
+    if body.target_date is not None:
+        local_dt = datetime.combine(body.target_date, time(hour=12), tzinfo=business_tz())
+        utc_dt = local_dt.astimezone(timezone.utc)
+        target_captured_at_iso = utc_dt.isoformat()
+        target_captured_at_ts = int(utc_dt.timestamp())
+    patch: Dict[str, object] = {
+        "is_seed": False,
+        "seed_pet_id": None,
+        "seed_active": None,
+        "seed_rank": None,
+        "seed_note": None,
+        "seed_updated_at_ts": now_ts,
+        "seed_updated_by": body.updated_by,
+        "image_role": "DAILY",
+        "captured_at_ts": target_captured_at_ts if target_captured_at_ts is not None else payload.get("captured_at_ts"),
+    }
+
+    if body.mode == "ACCEPTED":
+        if not source_pet_id:
+            raise HTTPException(status_code=400, detail="seed_pet_id not found for exemplar")
+        assignment_status = "ACCEPTED"
+        target_pet_id = source_pet_id
+        patch.update(
+            {
+                "pet_id": target_pet_id,
+                "assignment_status": assignment_status,
+                "label_source": "MANUAL",
+                "label_confidence": 1.0,
+                "labeled_at_ts": now_ts,
+                "labeled_by": body.updated_by,
+            }
+        )
+    else:
+        patch.update(
+            {
+                "pet_id": None,
+                "assignment_status": "UNREVIEWED",
+                "label_source": None,
+                "label_confidence": None,
+                "labeled_at_ts": None,
+                "labeled_by": None,
+            }
+        )
+
+    await run_in_threadpool(store.set_payload, [key], patch)
+    await run_in_threadpool(
+        _move_instance_to_daily_meta,
+        key,
+        str(payload.get("image_id") or "").strip() or None,
+        assignment_status,
+        target_pet_id,
+        body.updated_by,
+        now_ts,
+        target_captured_at_iso,
+        target_captured_at_ts,
+    )
+
+    return ExemplarMoveToDailyResponse(
+        instance_id=key,
+        image_id=(str(payload.get("image_id") or "").strip() or None),
+        assignment_status=assignment_status,
+        pet_id=target_pet_id,
+        updated_at=now,
+    )
 
 
 @router.delete("/exemplars/{instance_id}", response_model=ExemplarMutationResponse)

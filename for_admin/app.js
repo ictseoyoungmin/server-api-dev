@@ -16,6 +16,7 @@ const state = {
   lastBucketManifest: null,
   bucketSummary: null,
   singleSeedMode: "append",
+  folderSeedPolicy: "append",
   seedContextTarget: null,
 };
 
@@ -210,6 +211,8 @@ function closeSeedContextMenu() {
   if (!menu) return;
   menu.hidden = true;
   state.seedContextTarget = null;
+  const moveOptions = el("seedContextMoveOptions");
+  if (moveOptions) moveOptions.hidden = true;
 }
 
 window.closeSeedContextMenu = closeSeedContextMenu;
@@ -219,7 +222,7 @@ function openSeedContextMenu(event, item) {
   if (!menu) return;
   state.seedContextTarget = item;
   const width = 190;
-  const height = 118;
+  const height = 220;
   const left = Math.min(event.clientX, window.innerWidth - width - 12);
   const top = Math.min(event.clientY, window.innerHeight - height - 12);
   menu.style.left = `${Math.max(8, left)}px`;
@@ -227,15 +230,41 @@ function openSeedContextMenu(event, item) {
   menu.hidden = false;
 }
 
-async function jumpToPetDailyFromSeed() {
-  if (!state.seedContextTarget?.pet_id) return;
-  state.activePetId = String(state.seedContextTarget.pet_id);
-  state.galleryView = "PET";
+function toggleSeedMoveOptions() {
+  const options = el("seedContextMoveOptions");
+  if (!options) return;
+  options.hidden = !options.hidden;
+}
+
+async function moveSeedToDaily(mode) {
+  const target = state.seedContextTarget;
+  if (!target?.instance_id) return;
+  const data = await api(`/exemplars/${encodeURIComponent(String(target.instance_id))}/move-to-daily`, {
+    method: "POST",
+    body: JSON.stringify({
+      mode,
+      updated_by: "admin_dashboard",
+      target_date: currentDate() || null,
+    }),
+  });
+  log("Exemplar moved to daily", data);
+  if (mode === "ACCEPTED" && data.pet_id) {
+    state.activePetId = String(data.pet_id);
+    state.galleryView = "PET";
+  } else {
+    state.galleryView = "UNCLASSIFIED";
+  }
   resetSearchRanking();
   closeSeedContextMenu();
+  await loadPets();
   await Promise.all([loadActiveExemplars(), loadGallery()]);
   renderPetButtons();
   syncViewButtons();
+  if (state.inspectedImageId && state.inspectedImageId === String(target.image_id || "")) {
+    state.imageMetaCache.delete(state.inspectedImageId);
+    state.inspectedImageId = null;
+    renderInspector(null);
+  }
 }
 
 async function deleteSeedExemplar() {
@@ -260,6 +289,26 @@ ${displayImageName(target)}`);
     renderInspector(null);
     state.inspectedImageId = null;
   }
+}
+
+function setFolderSeedPolicy(policy) {
+  state.folderSeedPolicy = ["append", "create_new", "fail"].includes(policy) ? policy : "append";
+  renderFolderSeedPolicy();
+}
+
+function renderFolderSeedPolicy() {
+  const mapping = {
+    btnFolderPolicyAppend: "append",
+    btnFolderPolicyCreate: "create_new",
+    btnFolderPolicyFail: "fail",
+  };
+  Object.entries(mapping).forEach(([id, policy]) => {
+    const button = el(id);
+    if (!button) return;
+    const active = state.folderSeedPolicy === policy;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
 }
 
 function setSingleSeedMode(mode) {
@@ -776,6 +825,7 @@ async function loadPets() {
   }
   renderPetButtons();
   renderSingleSeedMode();
+  renderFolderSeedPolicy();
   if (!state.activePetId) {
     state.activeExemplars = [];
     renderActiveExemplars();
@@ -1041,12 +1091,13 @@ async function folderUploadExemplars() {
   fd.append("sync_label", "true");
   fd.append("apply_to_all_instances", "false");
   fd.append("skip_on_error", "true");
+  fd.append("existing_name_policy", state.folderSeedPolicy || "append");
   Array.from(folderInput.files).forEach((file) => {
     fd.append("files", file);
     fd.append("relative_paths", file.webkitRelativePath || file.name);
   });
   const data = await api("/exemplars/upload-folder", { method: "POST", body: fd });
-  log("Seed folder upload done", { succeeded: data.succeeded, failed: data.failed });
+  log("Seed folder upload done", { succeeded: data.succeeded, failed: data.failed, existing_name_policy: state.folderSeedPolicy });
   await loadWorkspace();
 }
 
@@ -1237,6 +1288,9 @@ function bindEvents() {
 
   el("btnSingleSeedAppendMode").addEventListener("click", () => setSingleSeedMode("append"));
   el("btnSingleSeedCreateMode").addEventListener("click", () => setSingleSeedMode("create"));
+  el("btnFolderPolicyAppend")?.addEventListener("click", () => setFolderSeedPolicy("append"));
+  el("btnFolderPolicyCreate")?.addEventListener("click", () => setFolderSeedPolicy("create_new"));
+  el("btnFolderPolicyFail")?.addEventListener("click", () => setFolderSeedPolicy("fail"));
 
   el("btnQuickUpload").addEventListener("click", async () => {
     const button = el("btnQuickUpload");
@@ -1268,12 +1322,25 @@ function bindEvents() {
     }
   });
 
-  el("seedContextGoDaily")?.addEventListener("click", async () => {
+  el("seedContextMoveDaily")?.addEventListener("click", () => {
+    toggleSeedMoveOptions();
+  });
+
+  el("seedContextMoveUnclassified")?.addEventListener("click", async () => {
     try {
-      await jumpToPetDailyFromSeed();
+      await moveSeedToDaily("UNCLASSIFIED");
     } catch (err) {
       alert(err.message);
-      log("Go to daily from seed failed", { error: err.message });
+      log("Move seed to daily unclassified failed", { error: err.message });
+    }
+  });
+
+  el("seedContextMoveAccepted")?.addEventListener("click", async () => {
+    try {
+      await moveSeedToDaily("ACCEPTED");
+    } catch (err) {
+      alert(err.message);
+      log("Move seed to daily accepted failed", { error: err.message });
     }
   });
 
@@ -1317,6 +1384,8 @@ async function init() {
   renderInspector(null);
   renderBucketSummary();
   renderPetButtons();
+  renderSingleSeedMode();
+  renderFolderSeedPolicy();
   renderActiveExemplars();
   renderGallery();
   syncViewButtons();

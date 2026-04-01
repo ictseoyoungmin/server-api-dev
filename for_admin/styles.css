@@ -589,6 +589,16 @@ h2 {
   line-height: 1;
 }
 
+.context-menu-submenu {
+  display: grid;
+  gap: 6px;
+  margin-left: 10px;
+}
+
+.context-menu-submenu[hidden] {
+  display: none;
+}
+
 .context-menu button.danger {
   background: rgba(166, 59, 45, 0.1);
   color: var(--rose);

@@ -69,6 +69,7 @@
                       <strong>설명</strong>
                       <p>폴더명 기준으로 여러 펫의 seed 이미지를 한 번에 등록합니다.</p>
                       <p>폴더 구조는 <code>root/pet_name/image.jpg</code> 형태를 권장합니다.</p>
+                      <p><code>기존 pet에 추가</code>는 같은 이름이 있으면 그 pet에 이어 붙이고, <code>새 pet 생성</code>은 suffix를 붙여 새 pet으로 만듭니다. <code>중복 이름이면 등록 중단</code>은 충돌 시 실패 처리합니다.</p>
                       <p>예시:</p>
                       <pre class="help-tree">root/
   뽀미/
@@ -81,6 +82,12 @@
                   </div>
                 </div>
                 <div class="meta">폴더 구조를 읽어 pet별 seed exemplar를 일괄 등록</div>
+              </div>
+              <div class="group-subtitle">중복 이름 처리</div>
+              <div class="seed-mode-toggle" role="tablist" aria-label="Folder Seed 중복 이름 처리 정책">
+                <button id="btnFolderPolicyAppend" type="button" class="seed-mode-button is-active" data-policy="append">기존 pet에 추가</button>
+                <button id="btnFolderPolicyCreate" type="button" class="seed-mode-button" data-policy="create_new">새 pet 생성</button>
+                <button id="btnFolderPolicyFail" type="button" class="seed-mode-button" data-policy="fail">중복 이름이면 등록 중단</button>
               </div>
               <label>Folder Seed Upload<input id="fFolder" type="file" webkitdirectory directory multiple /></label>
               <button id="btnFolderUpload">폴더 일괄 등록</button>
@@ -251,7 +258,11 @@
 
     <div id="seedContextMenu" class="context-menu" hidden>
       <button id="seedContextClose" class="context-menu-close" type="button" aria-label="닫기" onclick="window.closeSeedContextMenu && window.closeSeedContextMenu()"><span class="context-menu-close-icon">×</span></button>
-      <button id="seedContextGoDaily" type="button">daily 이미지로 이동</button>
+      <button id="seedContextMoveDaily" type="button">daily로 이동</button>
+      <div id="seedContextMoveOptions" class="context-menu-submenu" hidden>
+        <button id="seedContextMoveUnclassified" type="button">미분류로 이동</button>
+        <button id="seedContextMoveAccepted" type="button">현재 pet 버킷으로 이동</button>
+      </div>
       <button id="seedContextDelete" type="button">exemplar에서 삭제</button>
     </div>
 

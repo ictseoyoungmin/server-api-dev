@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -78,6 +78,23 @@ class ExemplarFolderUploadItemResult(BaseModel):
     registered_instances: int = 0
     status: str
     error: Optional[str] = None
+
+
+class ExemplarMoveToDailyRequest(BaseModel):
+    mode: Literal["UNCLASSIFIED", "ACCEPTED"]
+    updated_by: Optional[str] = None
+    target_date: Optional[date] = None
+
+
+class ExemplarMoveToDailyResponse(BaseModel):
+    status: Literal["ok"] = "ok"
+    instance_id: str
+    image_id: Optional[str] = None
+    from_role: Literal["SEED"] = "SEED"
+    to_role: Literal["DAILY"] = "DAILY"
+    assignment_status: Literal["UNREVIEWED", "ACCEPTED"]
+    pet_id: Optional[str] = None
+    updated_at: datetime
 
 
 class ExemplarFolderUploadResponse(BaseModel):
