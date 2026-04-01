@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
+import zipfile
 from pathlib import Path
 from datetime import datetime, time, timezone
 from typing import Dict, Iterable, List, Literal, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 from qdrant_client.http import models as qm
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from app.api.v1.endpoints.ingest import ingest as ingest_image
@@ -55,6 +60,19 @@ def _get_store(request: Request) -> QdrantStore:
     return store
 
 
+def _read_meta_safe(image_id: str) -> Optional[dict]:
+    image_id_clean = str(image_id or "").strip()
+    if not image_id_clean:
+        return None
+    path = Path(settings.reid_storage_dir) / "meta" / f"{image_id_clean}.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 def _read_image_name(image_id: Optional[str]) -> Optional[str]:
     image_id_clean = str(image_id or "").strip()
     if not image_id_clean:
@@ -87,6 +105,26 @@ def _delete_file_if_exists(path_value: Optional[object]) -> None:
         return
 
 
+def _remove_dir_if_empty(path_value: Optional[object]) -> None:
+    raw = str(path_value or "").strip()
+    if not raw:
+        return
+    path = Path(raw)
+    try:
+        if path.exists() and path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+    except Exception:
+        return
+
+
+def _move_file_if_present(src: Path, dest: Path) -> bool:
+    if not src.exists() or src.resolve() == dest.resolve():
+        return False
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dest))
+    return True
+
+
 def _move_instance_to_daily_meta(
     instance_id: str,
     image_id: Optional[str],
@@ -111,7 +149,28 @@ def _move_instance_to_daily_meta(
         return {"image_id": image_id_clean, "updated": False}
 
     image = meta.get("image") or {}
+    base_dir = Path(settings.reid_storage_dir)
+    old_raw_path = Path(str(image.get("raw_path") or "").strip()) if str(image.get("raw_path") or "").strip() else None
+    old_thumb_path = Path(str(image.get("thumb_path") or "").strip()) if str(image.get("thumb_path") or "").strip() else None
+    old_raw_parent = old_raw_path.parent if old_raw_path is not None else None
+    old_thumb_parent = old_thumb_path.parent if old_thumb_path is not None else None
+
+    ext = ".jpg"
+    if old_raw_path is not None and old_raw_path.suffix:
+        ext = old_raw_path.suffix.lower()
+    new_raw_path = base_dir / "images" / "daily" / f"{image_id_clean}{ext}"
+    new_thumb_path = base_dir / "thumbs" / "daily" / f"{image_id_clean}.jpg"
+
+    if old_raw_path is not None:
+        _move_file_if_present(old_raw_path, new_raw_path)
+    if old_thumb_path is not None:
+        _move_file_if_present(old_thumb_path, new_thumb_path)
+
     image["image_role"] = "DAILY"
+    image["raw_path"] = str(new_raw_path)
+    image["thumb_path"] = str(new_thumb_path)
+    image["raw_url"] = f"{settings.api_prefix}/images/{image_id_clean}?variant=raw"
+    image["thumb_url"] = f"{settings.api_prefix}/images/{image_id_clean}?variant=thumb"
     if target_captured_at_iso is not None:
         image["captured_at"] = target_captured_at_iso
     if target_captured_at_ts is not None:
@@ -133,11 +192,17 @@ def _move_instance_to_daily_meta(
 
     if changed:
         meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+    _remove_dir_if_empty(old_raw_parent)
+    _remove_dir_if_empty(old_thumb_parent)
+
     return {
         "image_id": str(image.get("image_id") or image_id_clean),
         "updated": changed,
         "assignment_status": assignment_status,
         "pet_id": pet_id,
+        "raw_path": str(new_raw_path),
+        "thumb_path": str(new_thumb_path),
     }
 
 
@@ -226,6 +291,21 @@ def _to_exemplar_item(store: QdrantStore, p: PointRecord) -> ExemplarItem:
             str(payload.get("assignment_status")) if payload.get("assignment_status") is not None else None
         ),
     )
+
+
+def _safe_archive_name(name: Optional[str], default: str = "unknown") -> str:
+    raw = (name or "").strip()
+    if not raw:
+        raw = default
+    safe = re.sub(r'[\/:*?"<>|]+', '_', raw)
+    safe = safe.replace('..', '_').strip().strip('.')
+    return safe or default
+
+
+def _zip_temp_path(prefix: str) -> Path:
+    export_dir = Path(settings.reid_storage_dir) / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    return export_dir / f"{prefix}_{int(_utcnow().timestamp())}.zip"
 
 
 def _seed_filter(pet_id: Optional[str], active: Optional[bool]) -> qm.Filter:
@@ -495,6 +575,55 @@ async def create_exemplars(request: Request, body: ExemplarCreateRequest):
     items = [_to_exemplar_item(store, p) for p in updated_points.values()]
     items.sort(key=lambda x: x.instance_id)
     return ExemplarMutationResponse(updated_at=now, count=len(items), items=items)
+
+
+@router.get("/exemplars/zip")
+async def download_exemplars_zip(
+    request: Request,
+    root_folder_name: Optional[str] = Query(default=None, description="Archive root folder name"),
+):
+    store = _get_store(request)
+    pet_name_map = read_pet_name_map()
+    points = await run_in_threadpool(store.scroll_points, _seed_filter(pet_id=None, active=True), 1000, False)
+    root_name = _safe_archive_name(root_folder_name, "exemplars")
+    zip_path = _zip_temp_path("exemplars")
+
+    written = 0
+    used_paths = set()
+    with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+        for point in points:
+            payload = point.payload or {}
+            image_id = str(payload.get("image_id") or "").strip()
+            if not image_id:
+                continue
+            meta = _read_meta_safe(image_id)
+            if meta is None:
+                continue
+            image = meta.get("image") or {}
+            raw_path = Path(str(image.get("raw_path") or ""))
+            if not raw_path.exists():
+                continue
+            pet_id = str(payload.get("seed_pet_id") or "").strip() or "unknown"
+            pet_folder = _safe_archive_name(pet_name_map.get(pet_id) or pet_id, pet_id)
+            base_name = str(image.get("original_filename") or "").strip() or raw_path.name
+            file_name = _safe_archive_name(base_name, raw_path.name)
+            arcname = f"{root_name}/{pet_folder}/{file_name}"
+            if arcname in used_paths:
+                file_name = _safe_archive_name(f"{image_id}_{base_name}", f"{image_id}_{raw_path.name}")
+                arcname = f"{root_name}/{pet_folder}/{file_name}"
+            used_paths.add(arcname)
+            zf.write(raw_path, arcname)
+            written += 1
+
+    if written == 0:
+        raise HTTPException(status_code=404, detail="No exemplar image files available for zip export")
+
+    return FileResponse(
+        path=zip_path,
+        media_type='application/zip',
+        filename=f"{root_name}.zip",
+        background=BackgroundTask(zip_path.unlink, missing_ok=True),
+    )
 
 
 @router.post("/exemplars/upload", response_model=ExemplarQuickRegisterResponse)

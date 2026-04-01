@@ -45,6 +45,16 @@ function apiBase() {
   return value("apiBase").trim().replace(/\/$/, "");
 }
 
+function dailyZipHref() {
+  const date = currentDate();
+  if (!date) return "";
+  return `${apiBase()}/daily/${encodeURIComponent(date)}/zip`;
+}
+
+function exemplarZipHref() {
+  return `${apiBase()}/exemplars/zip`;
+}
+
 function bucketZipHref() {
   const date = currentDate();
   if (!date) return "";
@@ -57,6 +67,19 @@ function resetBucketExportState() {
   state.bucketSummary = null;
   renderBucketSummary();
 }
+
+window.handleDownloadExemplarsZip = function handleDownloadExemplarsZip() {
+  window.open(exemplarZipHref(), "_blank", "noopener,noreferrer");
+};
+
+window.handleDownloadDailyZip = function handleDownloadDailyZip() {
+  const href = dailyZipHref();
+  if (!href) {
+    alert("먼저 날짜를 선택하세요.");
+    return;
+  }
+  window.open(href, "_blank", "noopener,noreferrer");
+};
 
 window.handleDownloadZip = function handleDownloadZip() {
   const href = bucketZipHref();
@@ -1300,6 +1323,14 @@ function bindEvents() {
       alert(err.message);
       log("Quick upload failed", { error: err.message });
     }
+  });
+
+  el("btnDownloadExemplarsZip")?.addEventListener("click", () => {
+    window.handleDownloadExemplarsZip();
+  });
+
+  el("btnDownloadDailyZip")?.addEventListener("click", () => {
+    window.handleDownloadDailyZip();
   });
 
   el("btnFolderUpload").addEventListener("click", async () => {

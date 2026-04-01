@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import zipfile
 import mimetypes
 from datetime import date as date_type
 from datetime import datetime, time, timedelta, timezone
@@ -12,6 +14,7 @@ from app.utils.timezone import business_tz
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
@@ -96,6 +99,21 @@ def _is_unclassified(meta: dict) -> bool:
 def _is_seed_image(meta: dict) -> bool:
     img = meta.get("image") or {}
     return str(img.get("image_role") or "DAILY").upper() == "SEED"
+
+
+def _safe_archive_name(name: Optional[str], default: str = "unknown") -> str:
+    raw = (name or "").strip()
+    if not raw:
+        raw = default
+    safe = re.sub(r'[\/:*?"<>|]+', '_', raw)
+    safe = safe.replace('..', '_').strip().strip('.')
+    return safe or default
+
+
+def _zip_temp_path(prefix: str) -> Path:
+    export_dir = Path(settings.reid_storage_dir) / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    return export_dir / f"{prefix}_{int(datetime.now(timezone.utc).timestamp())}.zip"
 
 
 def _day_range_ts(day: date_type) -> tuple[int, int]:
@@ -229,6 +247,63 @@ async def list_images(
         items.append(_build_item_from_db(str(e["image_id"]), e, meta))
 
     return ImagesListResponse(count=len(items), items=items)
+
+
+@router.get("/daily/{day}/zip")
+async def download_daily_zip(
+    day: date_type,
+    root_folder_name: Optional[str] = Query(default=None, description="Archive root folder name"),
+):
+    root_name = _safe_archive_name(root_folder_name, day.isoformat())
+    zip_path = _zip_temp_path(f"daily_{day.isoformat()}")
+    written = 0
+    used_paths = set()
+
+    meta_dir = Path(settings.reid_storage_dir) / "meta"
+    if not meta_dir.exists():
+        raise HTTPException(status_code=404, detail="No daily image files available for zip export")
+
+    for meta_path in meta_dir.glob("img_*.json"):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        img = meta.get("image") or {}
+        role = str(img.get("image_role") or "DAILY").upper()
+        if role == "SEED":
+            continue
+        ts = img.get("captured_at_ts") or img.get("uploaded_at_ts")
+        try:
+            biz_day = datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(business_tz()).date()
+        except Exception:
+            continue
+        if biz_day != day:
+            continue
+        src = Path(str(img.get("raw_path") or ""))
+        if not src.exists():
+            continue
+        base_name = str(img.get("original_filename") or "").strip() or src.name
+        file_name = _safe_archive_name(base_name, src.name)
+        arcname = f"{root_name}/{file_name}"
+        image_id = str(img.get("image_id") or "")
+        if arcname in used_paths:
+            file_name = _safe_archive_name(f"{image_id}_{base_name}", f"{image_id}_{src.name}")
+            arcname = f"{root_name}/{file_name}"
+        used_paths.add(arcname)
+        mode = 'a' if written else 'w'
+        with zipfile.ZipFile(zip_path, mode, compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.write(src, arcname)
+        written += 1
+
+    if written == 0:
+        raise HTTPException(status_code=404, detail="No daily image files available for zip export")
+
+    return FileResponse(
+        path=zip_path,
+        media_type='application/zip',
+        filename=f"{root_name}.zip",
+        background=BackgroundTask(zip_path.unlink, missing_ok=True),
+    )
 
 
 @router.get("/images/{image_id}")
