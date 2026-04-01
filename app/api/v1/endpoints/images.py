@@ -66,6 +66,7 @@ def _build_item(meta: dict) -> GalleryImageItem:
         height=int(img.get("height") or 0),
         raw_url=str(img.get("raw_url") or ""),
         thumb_url=str(img.get("thumb_url") or ""),
+        img_name=(str(img.get("original_filename") or "").strip() or None),
         instance_count=int(img.get("instance_count") or len(instances)),
         pet_ids=pet_ids,
     )
@@ -136,6 +137,7 @@ def _build_item_from_db(image_id: str, agg: dict, meta: Optional[dict]) -> Galle
         height=0,
         raw_url=f"{settings.api_prefix}/images/{image_id}?variant=raw",
         thumb_url=f"{settings.api_prefix}/images/{image_id}?variant=thumb",
+        img_name=(str((meta or {}).get("image", {}).get("original_filename") or "").strip() or None) if meta is not None else None,
         instance_count=int(agg.get("instance_count") or 0),
         pet_ids=pet_ids,
     )

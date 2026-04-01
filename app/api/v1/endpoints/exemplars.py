@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional
 
@@ -10,6 +12,7 @@ from qdrant_client.http import models as qm
 from starlette.concurrency import run_in_threadpool
 
 from app.api.v1.endpoints.ingest import ingest as ingest_image
+from app.core.config import settings
 from app.schemas.exemplars import (
     ExemplarCreateRequest,
     ExemplarFolderUploadItemResult,
@@ -49,6 +52,88 @@ def _get_store(request: Request) -> QdrantStore:
     return store
 
 
+def _read_image_name(image_id: Optional[str]) -> Optional[str]:
+    image_id_clean = str(image_id or "").strip()
+    if not image_id_clean:
+        return None
+    path = Path(settings.reid_storage_dir) / "meta" / f"{image_id_clean}.json"
+    if not path.exists():
+        return None
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    image = meta.get("image") or {}
+    name = str(image.get("original_filename") or "").strip()
+    return name or None
+
+
+def _meta_path(image_id: str) -> Path:
+    return Path(settings.reid_storage_dir) / "meta" / f"{image_id}.json"
+
+
+def _delete_file_if_exists(path_value: Optional[object]) -> None:
+    raw = str(path_value or "").strip()
+    if not raw:
+        return
+    path = Path(raw)
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:
+        return
+
+
+def _remove_instance_from_meta_and_maybe_delete_assets(instance_id: str, image_id: Optional[str]) -> dict:
+    image_id_clean = str(image_id or "").strip()
+    if not image_id_clean:
+        return {}
+
+    meta_path = _meta_path(image_id_clean)
+    if not meta_path.exists():
+        return {"image_id": image_id_clean, "remaining_instances": 0, "deleted_files": False}
+
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"image_id": image_id_clean, "remaining_instances": 0, "deleted_files": False}
+
+    image = meta.get("image") or {}
+    instances = list(meta.get("instances") or [])
+    kept = [inst for inst in instances if str(inst.get("instance_id") or "") != instance_id]
+    if len(kept) == len(instances):
+        return {
+            "image_id": str(image.get("image_id") or image_id_clean),
+            "remaining_instances": len(instances),
+            "deleted_files": False,
+        }
+
+    remaining = len(kept)
+    if remaining > 0:
+        image["instance_count"] = remaining
+        meta["image"] = image
+        meta["instances"] = kept
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        return {
+            "image_id": str(image.get("image_id") or image_id_clean),
+            "remaining_instances": remaining,
+            "deleted_files": False,
+        }
+
+    _delete_file_if_exists(image.get("raw_path"))
+    _delete_file_if_exists(image.get("thumb_path"))
+    try:
+        meta_path.unlink(missing_ok=True)
+    except TypeError:
+        if meta_path.exists():
+            meta_path.unlink()
+    return {
+        "image_id": str(image.get("image_id") or image_id_clean),
+        "remaining_instances": 0,
+        "deleted_files": True,
+    }
+
+
 def _normalize_ids(instance_ids: Iterable[str]) -> List[str]:
     dedup = []
     seen = set()
@@ -69,6 +154,7 @@ def _to_exemplar_item(store: QdrantStore, p: PointRecord) -> ExemplarItem:
     return ExemplarItem(
         instance_id=str(instance_id),
         image_id=(str(payload.get("image_id")) if payload.get("image_id") is not None else None),
+        img_name=_read_image_name(payload.get("image_id")),
         species=(str(payload.get("species")) if payload.get("species") is not None else None),
         pet_id=str(payload.get("seed_pet_id") or ""),
         active=bool(payload.get("seed_active", True)),
@@ -119,7 +205,7 @@ async def _register_exemplar_from_uploaded_file(
     request: Request,
     store: QdrantStore,
     file: UploadFile,
-    pet_id: str,
+    pet_id: Optional[str],
     pet_name: str,
     updated_by: Optional[str],
     trainer_id: Optional[str],
@@ -128,10 +214,7 @@ async def _register_exemplar_from_uploaded_file(
     apply_to_all_instances: bool,
 ) -> tuple[str, str, str, List[ExemplarItem]]:
     pet_name_clean = pet_name.strip()
-    pet_id = str(pet_id or "").strip()
-    if not pet_id:
-        raise HTTPException(status_code=400, detail="pet_id is required")
-    ensure_pet_mapping(pet_id, pet_name_clean)
+    pet_id_clean = str(pet_id or "").strip()
     now = _utcnow()
     now_ts = int(now.timestamp())
 
@@ -149,13 +232,17 @@ async def _register_exemplar_from_uploaded_file(
     if not instances:
         raise HTTPException(status_code=400, detail="No detected instances in uploaded image")
 
+    if not pet_id_clean:
+        pet_id_clean = _pet_id_from_name(pet_name_clean)
+    ensure_pet_mapping(pet_id_clean, pet_name_clean)
+
     selected = instances if apply_to_all_instances else [max(instances, key=lambda x: float(x.confidence))]
 
     updates: Dict[str, dict] = {}
     for inst in selected:
         payload = {
             "is_seed": True,
-            "seed_pet_id": pet_id,
+            "seed_pet_id": pet_id_clean,
             "seed_active": True,
             "seed_rank": None,
             "seed_note": "quick_upload",
@@ -168,7 +255,7 @@ async def _register_exemplar_from_uploaded_file(
         if sync_label:
             payload.update(
                 {
-                    "pet_id": pet_id,
+                    "pet_id": pet_id_clean,
                     "assignment_status": "ACCEPTED",
                     "label_source": "MANUAL",
                     "label_confidence": 1.0,
@@ -184,10 +271,10 @@ async def _register_exemplar_from_uploaded_file(
     updated_points = await run_in_threadpool(store.retrieve_points, updates.keys(), False)
     items = [_to_exemplar_item(store, p) for p in updated_points.values()]
     items.sort(key=lambda x: x.instance_id)
-    return pet_id, pet_name_clean, str(ingest_resp.image.image_id), items
+    return pet_id_clean, pet_name_clean, str(ingest_resp.image.image_id), items
 
 
-def _resolve_quick_upload_target(pet_id: Optional[str], pet_name: Optional[str]) -> tuple[str, str, str]:
+def _resolve_quick_upload_target(pet_id: Optional[str], pet_name: Optional[str]) -> tuple[str, Optional[str], str]:
     pet_id_clean = str(pet_id or "").strip()
     pet_name_clean = str(pet_name or "").strip()
 
@@ -212,8 +299,7 @@ def _resolve_quick_upload_target(pet_id: Optional[str], pet_name: Optional[str])
             },
         )
 
-    created_pet_id = _pet_id_from_name(pet_name_clean)
-    return "create", created_pet_id, pet_name_clean
+    return "create", None, pet_name_clean
 
 
 @router.get("/exemplars", response_model=ExemplarListResponse)
@@ -498,15 +584,13 @@ async def delete_exemplar(
     if point is None:
         raise HTTPException(status_code=404, detail="instance not found")
 
-    patch = {
-        "is_seed": False,
-        "seed_pet_id": None,
-        "seed_active": None,
-        "seed_rank": None,
-        "seed_note": None,
-        "seed_updated_at_ts": int(now.timestamp()),
-        "seed_updated_by": updated_by,
-    }
-    await run_in_threadpool(store.set_payload, [key], patch)
+    payload = point.payload or {}
+    if not bool(payload.get("is_seed", False)):
+        raise HTTPException(status_code=400, detail="instance is not an exemplar")
+
+    image_id = str(payload.get("image_id") or "").strip() or None
+
+    await run_in_threadpool(store.delete_points, [key])
+    await run_in_threadpool(_remove_instance_from_meta_and_maybe_delete_assets, key, image_id)
 
     return ExemplarMutationResponse(updated_at=now, count=0, items=[])

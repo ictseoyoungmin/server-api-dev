@@ -249,6 +249,12 @@
       </section>
     </main>
 
+    <div id="seedContextMenu" class="context-menu" hidden>
+      <button id="seedContextClose" class="context-menu-close" type="button" aria-label="닫기" onclick="window.closeSeedContextMenu && window.closeSeedContextMenu()"><span class="context-menu-close-icon">×</span></button>
+      <button id="seedContextGoDaily" type="button">daily 이미지로 이동</button>
+      <button id="seedContextDelete" type="button">exemplar에서 삭제</button>
+    </div>
+
     <script src="./app.js"></script>
   </body>
 </html>

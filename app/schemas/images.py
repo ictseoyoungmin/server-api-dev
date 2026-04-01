@@ -18,6 +18,7 @@ class GalleryImageItem(BaseModel):
     height: int
     raw_url: str = Field(..., description="Relative URL for original image bytes")
     thumb_url: str = Field(..., description="Relative URL for thumbnail image bytes")
+    img_name: Optional[str] = None
     instance_count: int = 0
     pet_ids: List[str] = []
 

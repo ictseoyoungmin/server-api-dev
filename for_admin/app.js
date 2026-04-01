@@ -16,6 +16,7 @@ const state = {
   lastBucketManifest: null,
   bucketSummary: null,
   singleSeedMode: "append",
+  seedContextTarget: null,
 };
 
 function nowIso() {
@@ -157,12 +158,20 @@ function renderActiveExemplars() {
   state.activeExemplars.forEach((item) => {
     const card = document.createElement("div");
     card.className = "seed-card";
+    card.dataset.instanceId = String(item.instance_id || "");
+    card.dataset.petId = String(item.pet_id || "");
+    card.dataset.imageId = String(item.image_id || "");
     const src = item.image_id ? `${apiBase()}/images/${encodeURIComponent(item.image_id)}?variant=thumb` : "";
+    const imgName = displayImageName(item);
     card.innerHTML = `
-      <img src="${src}" alt="${item.pet_id}" loading="lazy" />
-      <span>${item.pet_id}</span>
-      <code>${item.instance_id}</code>
+      <img src="${src}" alt="${escapeHtml(item.pet_id)}" loading="lazy" />
+      <span>${escapeHtml(item.pet_id)}</span>
+      <div class="img-name" title="${escapeHtml(imgName)}">${escapeHtml(imgName)}</div>
     `;
+    card.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      openSeedContextMenu(event, item);
+    });
     strip.appendChild(card);
   });
 }
@@ -194,6 +203,63 @@ function petOptionsMarkup(selectedPetId = "") {
     options.push(`<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`);
   });
   return options.join("");
+}
+
+function closeSeedContextMenu() {
+  const menu = el("seedContextMenu");
+  if (!menu) return;
+  menu.hidden = true;
+  state.seedContextTarget = null;
+}
+
+window.closeSeedContextMenu = closeSeedContextMenu;
+
+function openSeedContextMenu(event, item) {
+  const menu = el("seedContextMenu");
+  if (!menu) return;
+  state.seedContextTarget = item;
+  const width = 190;
+  const height = 118;
+  const left = Math.min(event.clientX, window.innerWidth - width - 12);
+  const top = Math.min(event.clientY, window.innerHeight - height - 12);
+  menu.style.left = `${Math.max(8, left)}px`;
+  menu.style.top = `${Math.max(8, top)}px`;
+  menu.hidden = false;
+}
+
+async function jumpToPetDailyFromSeed() {
+  if (!state.seedContextTarget?.pet_id) return;
+  state.activePetId = String(state.seedContextTarget.pet_id);
+  state.galleryView = "PET";
+  resetSearchRanking();
+  closeSeedContextMenu();
+  await Promise.all([loadActiveExemplars(), loadGallery()]);
+  renderPetButtons();
+  syncViewButtons();
+}
+
+async function deleteSeedExemplar() {
+  const target = state.seedContextTarget;
+  if (!target?.instance_id) return;
+  const ok = window.confirm(`exemplar를 삭제할까요?
+${displayImageName(target)}`);
+  if (!ok) return;
+  await api(`/exemplars/${encodeURIComponent(String(target.instance_id))}${toQuery({ updated_by: "admin_dashboard" })}`, { method: "DELETE" });
+  log("Exemplar deleted", {
+    instance_id: target.instance_id,
+    pet_id: target.pet_id,
+    image_id: target.image_id,
+    img_name: displayImageName(target),
+  });
+  closeSeedContextMenu();
+  await loadPets();
+  if (state.galleryView === "PET" || state.galleryView === "ALL" || state.galleryView === "UNCLASSIFIED") {
+    await loadGallery();
+  }
+  if (state.inspectedImageId && state.inspectedImageId === String(target.image_id || "")) {
+    renderInspector(null);
+    state.inspectedImageId = null;
+  }
 }
 
 function setSingleSeedMode(mode) {
@@ -354,7 +420,7 @@ function renderGallery() {
         <div class="card-score-row"><span class="multiplicity-badge ${instanceCount > 1 ? "multi" : "single"}">${multiplicity}</span></div>
         ${score !== undefined ? `<div class="card-score-row"><span class="score-badge">sim ${score.toFixed(2)}</span></div>` : ""}
         <div class="pet-label">${petLabel}</div>
-        <div class="pet-sub"><code>${item.image_id}</code></div>
+        <div class="pet-sub filename" title="${escapeHtml(displayImageName(item))}"><code>${escapeHtml(displayImageName(item))}</code></div>
         <div class="instance-meta">instances=${item.instance_count}</div>
       </div>
     `;
@@ -402,7 +468,7 @@ function renderInspector(meta) {
       </div>
       <div>
         <div class="pet-label">${petLabel}</div>
-        <div class="pet-sub"><code>${meta.image?.image_id || ""}</code></div>
+        <div class="pet-sub filename" title="${escapeHtml(meta.image?.img_name || meta.image?.image_id || "")}"><code>${escapeHtml(meta.image?.img_name || meta.image?.image_id || "")}</code></div>
         <div class="pet-sub">captured_at=${meta.image?.captured_at || "n/a"}</div>
       </div>
     </div>
@@ -522,6 +588,14 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function displayImageName(item) {
+  const imgName = String(item?.img_name || "").trim();
+  if (imgName) return imgName;
+  const imageId = String(item?.image_id || "").trim();
+  if (imageId) return imageId;
+  return "unknown";
 }
 
 function renderBucketSummary() {
@@ -1194,6 +1268,45 @@ function bindEvents() {
     }
   });
 
+  el("seedContextGoDaily")?.addEventListener("click", async () => {
+    try {
+      await jumpToPetDailyFromSeed();
+    } catch (err) {
+      alert(err.message);
+      log("Go to daily from seed failed", { error: err.message });
+    }
+  });
+
+  const deleteButton = el("seedContextDelete");
+  if (deleteButton) deleteButton.classList.add("danger");
+  deleteButton?.addEventListener("click", async () => {
+    try {
+      await deleteSeedExemplar();
+    } catch (err) {
+      alert(err.message);
+      log("Delete seed exemplar failed", { error: err.message });
+    }
+  });
+
+  el("seedContextClose")?.addEventListener("click", () => {
+    closeSeedContextMenu();
+  });
+
+  document.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("#seedContextMenu")) return;
+    closeSeedContextMenu();
+  });
+
+  document.addEventListener("click", (event) => {
+    if (event.target.closest("#seedContextMenu")) return;
+    closeSeedContextMenu();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeSeedContextMenu();
+  });
+
+  window.addEventListener("scroll", closeSeedContextMenu, true);
   bindViewButtons();
   bindHelpPopovers();
 }

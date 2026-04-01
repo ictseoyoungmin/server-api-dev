@@ -33,6 +33,7 @@ class ExemplarUpdateRequest(BaseModel):
 class ExemplarItem(BaseModel):
     instance_id: str
     image_id: Optional[str] = None
+    img_name: Optional[str] = None
     species: Optional[str] = None
     pet_id: str
     active: bool
@@ -73,6 +74,7 @@ class ExemplarFolderUploadItemResult(BaseModel):
     pet_name: Optional[str] = None
     pet_id: Optional[str] = None
     image_id: Optional[str] = None
+    img_name: Optional[str] = None
     registered_instances: int = 0
     status: str
     error: Optional[str] = None

@@ -25,5 +25,5 @@ set +a
 export TZ
 
 HOST="${HOST:-0.0.0.0}"
-PORT="${PORT:-8001}"
+PORT="${PORT:-8009}"
 exec uvicorn app.main:app --host "${HOST}" --port "${PORT}"

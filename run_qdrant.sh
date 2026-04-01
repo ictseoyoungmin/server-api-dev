@@ -11,8 +11,8 @@ if ! command -v "${QDRANT_BIN}" >/dev/null 2>&1; then
 fi
 
 STORAGE_DIR="${QDRANT_STORAGE_DIR:-${ROOT_DIR}/qdrant_storage}"
-HTTP_PORT="${QDRANT_HTTP_PORT:-6333}"
-GRPC_PORT="${QDRANT_GRPC_PORT:-6334}"
+HTTP_PORT="${QDRANT_HTTP_PORT:-6335}"
+GRPC_PORT="${QDRANT_GRPC_PORT:-6336}"
 
 mkdir -p "${STORAGE_DIR}"
 
