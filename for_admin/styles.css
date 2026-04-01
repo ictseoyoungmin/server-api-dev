@@ -1055,7 +1055,8 @@ body.inspector-open {
 .detail-body {
   display: grid;
   gap: 14px;
-  overflow: auto;
+  overflow: hidden;
+  min-height: 0;
   padding-right: 4px;
 }
 
@@ -1164,6 +1165,10 @@ body.inspector-open {
 .instance-list {
   display: grid;
   gap: 10px;
+  min-height: 0;
+  max-height: 36vh;
+  overflow: auto;
+  padding-right: 6px;
 }
 
 .instance-row {
@@ -1312,6 +1317,10 @@ body.inspector-open {
   .inspector-drawer-panel {
     max-height: 82vh;
     border-radius: 20px;
+  }
+
+  .instance-list {
+    max-height: 42vh;
   }
 
   .inspector-drawer-actions {
