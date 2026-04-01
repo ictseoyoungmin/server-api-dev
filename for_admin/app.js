@@ -68,6 +68,23 @@ function resetBucketExportState() {
   renderBucketSummary();
 }
 
+function setInspectorDrawerOpen(open) {
+  const drawer = el("inspectorDrawer");
+  const backdrop = el("inspectorBackdrop");
+  if (!drawer || !backdrop) return;
+  drawer.classList.toggle("is-open", !!open);
+  drawer.setAttribute("aria-hidden", open ? "false" : "true");
+  backdrop.hidden = !open;
+  document.body.classList.toggle("inspector-open", !!open);
+}
+
+function closeInspectorDrawer() {
+  state.inspectedImageId = null;
+  renderInspector(null);
+}
+
+window.closeInspectorDrawer = closeInspectorDrawer;
+
 window.handleDownloadExemplarsZip = function handleDownloadExemplarsZip() {
   window.open(exemplarZipHref(), "_blank", "noopener,noreferrer");
 };
@@ -192,6 +209,9 @@ function renderActiveExemplars() {
       <span>${escapeHtml(item.pet_id)}</span>
       <div class="img-name" title="${escapeHtml(imgName)}">${escapeHtml(imgName)}</div>
     `;
+    card.addEventListener("click", async () => {
+      if (item.image_id) await inspectImage(String(item.image_id));
+    });
     card.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       openSeedContextMenu(event, item);
@@ -212,9 +232,19 @@ function inferInstanceState(inst) {
   return "unreviewed";
 }
 
-function displayInstancePet(inst) {
-  if (inst.pet_id) return String(inst.pet_id);
-  if (inst.auto_pet_id) return `${inst.auto_pet_id} (candidate)`;
+function petDisplayNameById(petId) {
+  const key = String(petId || "").trim();
+  if (!key) return "";
+  const pet = state.pets.find((item) => String(item.pet_id || "") === key);
+  return String(pet?.pet_name || pet?.pet_id || key).trim();
+}
+
+function displayInstancePet(inst, fallbackPetLabel = "") {
+  const petId = String(inst?.pet_id || "").trim();
+  if (petId) return petDisplayNameById(petId) || petId;
+  if (inst?.auto_pet_id) return `${inst.auto_pet_id} (candidate)`;
+  const fallback = String(fallbackPetLabel || "").trim();
+  if (fallback) return fallback;
   return "미지정";
 }
 
@@ -515,6 +545,21 @@ function renderGallery() {
   });
 }
 
+function resolveSeedInspectorTarget(meta, inst) {
+  const imageId = String(meta?.image?.image_id || "").trim();
+  const instanceId = String(inst?.instance_id || "").trim();
+  const exact = state.activeExemplars.find((item) => String(item.instance_id || "") === instanceId);
+  if (exact) return exact;
+  const byImage = state.activeExemplars.find((item) => String(item.image_id || "") === imageId);
+  if (byImage) return byImage;
+  return {
+    instance_id: instanceId || null,
+    image_id: imageId || null,
+    pet_id: String(inst?.pet_id || inst?.seed_pet_id || state.activePetId || "").trim() || null,
+    img_name: String(meta?.image?.img_name || meta?.image?.image_id || "").trim() || null,
+  };
+}
+
 function renderInspector(meta) {
   const pane = el("detailPane");
   const detailMeta = el("detailMeta");
@@ -526,11 +571,17 @@ function renderInspector(meta) {
     pane.className = "detail-empty";
     pane.textContent = "이미지를 클릭하면 instance 상세가 표시됩니다.";
     detailMeta.textContent = "";
+    setInspectorDrawerOpen(false);
     return;
   }
   detailMeta.textContent = meta.image?.image_id || "";
+  setInspectorDrawerOpen(true);
   pane.className = "detail-body";
-  const petLabel = Array.isArray(meta.image?.pet_ids) && meta.image.pet_ids.length > 0 ? meta.image.pet_ids.join(", ") : "미지정";
+  const imageRole = String(meta.image?.image_role || "").toUpperCase();
+  const isSeedImage = imageRole === "SEED";
+  const petLabel = Array.isArray(meta.image?.pet_ids) && meta.image.pet_ids.length > 0
+    ? meta.image.pet_ids.join(", ")
+    : (isSeedImage ? String(meta.image?.pet_name || state.activePetId || "미지정") : "미지정");
   const instances = Array.isArray(meta.instances) ? meta.instances : [];
   pane.innerHTML = `
     <div class="detail-hero">
@@ -542,6 +593,7 @@ function renderInspector(meta) {
         <div class="pet-label">${petLabel}</div>
         <div class="pet-sub filename" title="${escapeHtml(meta.image?.img_name || meta.image?.image_id || "")}"><code>${escapeHtml(meta.image?.img_name || meta.image?.image_id || "")}</code></div>
         <div class="pet-sub">captured_at=${meta.image?.captured_at || "n/a"}</div>
+        <div class="pet-sub">role=${imageRole || "UNKNOWN"}</div>
       </div>
     </div>
     <div class="instance-list"></div>
@@ -558,8 +610,8 @@ function renderInspector(meta) {
   });
   instances.forEach((inst, idx) => {
     const stateClass = inferInstanceState(inst);
-    const bbox = inst.bbox || {};
-    const label = displayInstancePet(inst);
+    const seedFallbackLabel = isSeedImage ? (String(meta.image?.pet_name || "").trim() || petDisplayNameById(state.activePetId)) : "";
+    const label = displayInstancePet(inst, seedFallbackLabel);
     const number = idx + 1;
     const box = document.createElement("button");
     box.type = "button";
@@ -572,10 +624,30 @@ function renderInspector(meta) {
     overlay.appendChild(box);
 
     const preferredPetId = String(inst.pet_id || state.activePetId || "");
+    const seedTarget = isSeedImage ? resolveSeedInspectorTarget(meta, inst) : null;
     const row = document.createElement("div");
     row.className = `instance-row ${stateClass}`;
     row.dataset.instanceId = inst.instance_id;
-    row.innerHTML = `
+    row.innerHTML = isSeedImage ? `
+      <div class="instance-main">
+        <div class="instance-title-line">
+          <span class="instance-chip ${stateClass}">#${number}</span>
+          <strong>${label}</strong>
+        </div>
+        <div class="sub">${inst.species} · conf=${Number(inst.confidence || 0).toFixed(3)}</div>
+        <div class="sub"><code>${inst.instance_id}</code></div>
+      </div>
+      <div class="instance-actions">
+        <div class="instance-select-wrap instance-exemplar-actions">
+          <span>Exemplar 작업</span>
+          <div class="instance-action-buttons">
+            <button data-seed-move-unclassified="${inst.instance_id}">미분류로 이동</button>
+            <button class="primary" data-seed-move-accepted="${inst.instance_id}">현재 pet 버킷으로 이동</button>
+            <button class="danger" data-seed-delete="${inst.instance_id}">exemplar에서 삭제</button>
+          </div>
+        </div>
+      </div>
+    ` : `
       <div class="instance-main">
         <div class="instance-title-line">
           <span class="instance-chip ${stateClass}">#${number}</span>
@@ -601,6 +673,9 @@ function renderInspector(meta) {
       if (event.target.closest("button, select, label")) return;
       setActiveInspectorInstance(pane, inst.instance_id);
     });
+    if (seedTarget) {
+      row.dataset.seedTarget = JSON.stringify(seedTarget);
+    }
     list.appendChild(row);
   });
   pane.querySelectorAll("[data-instance-assign]").forEach((btn) => {
@@ -633,6 +708,42 @@ function renderInspector(meta) {
       try {
         if (!confirm("이 검출 instance를 제거할까요? 원본 이미지는 유지됩니다.")) return;
         await withButtonBusy(btn, () => removeInspectorInstance(btn.dataset.instanceRemove));
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+    });
+  });
+  pane.querySelectorAll("[data-seed-move-unclassified]").forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      try {
+        const row = btn.closest(".instance-row");
+        state.seedContextTarget = JSON.parse(row?.dataset.seedTarget || '{}');
+        await withButtonBusy(btn, () => moveSeedToDaily("UNCLASSIFIED"));
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+    });
+  });
+  pane.querySelectorAll("[data-seed-move-accepted]").forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      try {
+        const row = btn.closest(".instance-row");
+        state.seedContextTarget = JSON.parse(row?.dataset.seedTarget || '{}');
+        await withButtonBusy(btn, () => moveSeedToDaily("ACCEPTED"));
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+    });
+  });
+  pane.querySelectorAll("[data-seed-delete]").forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      try {
+        const row = btn.closest(".instance-row");
+        state.seedContextTarget = JSON.parse(row?.dataset.seedTarget || '{}');
+        await withButtonBusy(btn, () => deleteSeedExemplar());
       } catch (err) {
         alert(err.message || String(err));
       }
@@ -1390,6 +1501,14 @@ function bindEvents() {
     closeSeedContextMenu();
   });
 
+  el("btnCloseInspector")?.addEventListener("click", () => {
+    closeInspectorDrawer();
+  });
+
+  el("inspectorBackdrop")?.addEventListener("click", () => {
+    closeInspectorDrawer();
+  });
+
   document.addEventListener("pointerdown", (event) => {
     if (event.target.closest("#seedContextMenu")) return;
     closeSeedContextMenu();
@@ -1401,7 +1520,10 @@ function bindEvents() {
   });
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeSeedContextMenu();
+    if (event.key === "Escape") {
+      closeSeedContextMenu();
+      closeInspectorDrawer();
+    }
   });
 
   window.addEventListener("scroll", closeSeedContextMenu, true);

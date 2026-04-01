@@ -54,6 +54,15 @@ def _bbox_area_ratio(det) -> float:
     return max(0.0, float(det.x2) - float(det.x1)) * max(0.0, float(det.y2) - float(det.y1))
 
 
+def _seed_detection_sort_key(det) -> tuple[float, float, float]:
+    cx = (float(det.x1) + float(det.x2)) * 0.5
+    cy = (float(det.y1) + float(det.y2)) * 0.5
+    center_dist_sq = (cx - 0.5) ** 2 + (cy - 0.5) ** 2
+    area = _bbox_area_ratio(det)
+    conf = float(getattr(det, "confidence", 0.0))
+    return (center_dist_sq, -area, -conf)
+
+
 def _should_apply_min_bbox_area(image_role: str) -> bool:
     if image_role == "SEED":
         return bool(settings.apply_min_bbox_area_to_seed)
@@ -177,9 +186,9 @@ async def ingest(
     detections = _filter_small_detections(detections, image_role=image_role)
 
     # Seed policy: one exemplar instance per image.
-    # Keep only the highest-confidence detection for SEED images.
+    # Prefer the detection nearest the image center, then the largest bbox, then confidence.
     if image_role == "SEED" and len(detections) > 1:
-        detections = [max(detections, key=lambda d: float(getattr(d, "confidence", 0.0)))]
+        detections = [min(detections, key=_seed_detection_sort_key)]
 
     # Crop instances
     crops = []

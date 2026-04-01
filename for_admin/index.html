@@ -236,14 +236,6 @@
           <div id="galleryGrid" class="gallery-grid"></div>
         </section>
 
-        <section class="panel inspector-panel">
-          <div class="panel-head">
-            <h2>Inspector</h2>
-            <div id="detailMeta" class="meta"></div>
-          </div>
-          <div id="detailPane" class="detail-empty">이미지를 클릭하면 instance 상세가 표시됩니다.</div>
-        </section>
-
         <section class="panel bucket-summary-panel">
           <div class="panel-head">
             <div>
@@ -256,6 +248,23 @@
         </section>
       </section>
     </main>
+
+    <div id="inspectorBackdrop" class="inspector-backdrop" hidden></div>
+    <section id="inspectorDrawer" class="inspector-drawer" aria-hidden="true">
+      <div class="panel inspector-panel inspector-drawer-panel">
+        <div class="panel-head inspector-drawer-head">
+          <div>
+            <p class="eyebrow small-eyebrow">Image Detail</p>
+            <h2>Inspector</h2>
+          </div>
+          <div class="inspector-drawer-actions">
+            <div id="detailMeta" class="meta"></div>
+            <button id="btnCloseInspector" class="context-menu-close inspector-close" type="button" aria-label="닫기"><span class="context-menu-close-icon">×</span></button>
+          </div>
+        </div>
+        <div id="detailPane" class="detail-empty">이미지를 클릭하면 instance 상세가 표시됩니다.</div>
+      </div>
+    </section>
 
     <div id="seedContextMenu" class="context-menu" hidden>
       <button id="seedContextClose" class="context-menu-close" type="button" aria-label="닫기" onclick="window.closeSeedContextMenu && window.closeSeedContextMenu()"><span class="context-menu-close-icon">×</span></button>
