@@ -120,9 +120,36 @@ def _remove_dir_if_empty(path_value: Optional[object]) -> None:
 def _move_file_if_present(src: Path, dest: Path) -> bool:
     if not src.exists() or src.resolve() == dest.resolve():
         return False
+    if dest.exists() and src.resolve() != dest.resolve():
+        raise RuntimeError(f"Destination already exists: {dest}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(dest))
     return True
+
+
+def _restore_moved_instance_meta(rollback: dict) -> None:
+    meta_path = Path(str(rollback.get("meta_path") or "").strip())
+    original_meta_text = str(rollback.get("original_meta_text") or "")
+    old_raw_path = Path(str(rollback.get("old_raw_path") or "").strip()) if str(rollback.get("old_raw_path") or "").strip() else None
+    old_thumb_path = Path(str(rollback.get("old_thumb_path") or "").strip()) if str(rollback.get("old_thumb_path") or "").strip() else None
+    new_raw_path = Path(str(rollback.get("new_raw_path") or "").strip()) if str(rollback.get("new_raw_path") or "").strip() else None
+    new_thumb_path = Path(str(rollback.get("new_thumb_path") or "").strip()) if str(rollback.get("new_thumb_path") or "").strip() else None
+
+    if rollback.get("moved_raw") and old_raw_path is not None and new_raw_path is not None and new_raw_path.exists():
+        old_raw_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(new_raw_path), str(old_raw_path))
+    if rollback.get("moved_thumb") and old_thumb_path is not None and new_thumb_path is not None and new_thumb_path.exists():
+        old_thumb_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(new_thumb_path), str(old_thumb_path))
+
+    if meta_path and original_meta_text:
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        meta_path.write_text(original_meta_text, encoding="utf-8")
+
+    if new_raw_path is not None:
+        _remove_dir_if_empty(new_raw_path.parent)
+    if new_thumb_path is not None:
+        _remove_dir_if_empty(new_thumb_path.parent)
 
 
 def _move_instance_to_daily_meta(
@@ -137,16 +164,17 @@ def _move_instance_to_daily_meta(
 ) -> dict:
     image_id_clean = str(image_id or "").strip()
     if not image_id_clean:
-        return {}
+        raise RuntimeError("image_id missing for move-to-daily")
 
     meta_path = _meta_path(image_id_clean)
     if not meta_path.exists():
-        return {"image_id": image_id_clean, "updated": False}
+        raise FileNotFoundError(f"Image meta not found for move-to-daily: {image_id_clean}")
 
+    original_meta_text = meta_path.read_text(encoding="utf-8")
     try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    except Exception:
-        return {"image_id": image_id_clean, "updated": False}
+        meta = json.loads(original_meta_text)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to parse meta for move-to-daily: {image_id_clean}") from exc
 
     image = meta.get("image") or {}
     base_dir = Path(settings.reid_storage_dir)
@@ -161,22 +189,6 @@ def _move_instance_to_daily_meta(
     new_raw_path = base_dir / "images" / "daily" / f"{image_id_clean}{ext}"
     new_thumb_path = base_dir / "thumbs" / "daily" / f"{image_id_clean}.jpg"
 
-    if old_raw_path is not None:
-        _move_file_if_present(old_raw_path, new_raw_path)
-    if old_thumb_path is not None:
-        _move_file_if_present(old_thumb_path, new_thumb_path)
-
-    image["image_role"] = "DAILY"
-    image["raw_path"] = str(new_raw_path)
-    image["thumb_path"] = str(new_thumb_path)
-    image["raw_url"] = f"{settings.api_prefix}/images/{image_id_clean}?variant=raw"
-    image["thumb_url"] = f"{settings.api_prefix}/images/{image_id_clean}?variant=thumb"
-    if target_captured_at_iso is not None:
-        image["captured_at"] = target_captured_at_iso
-    if target_captured_at_ts is not None:
-        image["captured_at_ts"] = target_captured_at_ts
-    meta["image"] = image
-
     changed = False
     for inst in meta.get("instances") or []:
         if str(inst.get("instance_id") or "") != instance_id:
@@ -189,9 +201,41 @@ def _move_instance_to_daily_meta(
         inst["labeled_by"] = updated_by if assignment_status == "ACCEPTED" else None
         changed = True
         break
+    if not changed:
+        raise RuntimeError(f"instance not found in meta for move-to-daily: {instance_id}")
 
-    if changed:
+    image["image_role"] = "DAILY"
+    image["raw_path"] = str(new_raw_path)
+    image["thumb_path"] = str(new_thumb_path)
+    image["raw_url"] = f"{settings.api_prefix}/images/{image_id_clean}?variant=raw"
+    image["thumb_url"] = f"{settings.api_prefix}/images/{image_id_clean}?variant=thumb"
+    if target_captured_at_iso is not None:
+        image["captured_at"] = target_captured_at_iso
+    if target_captured_at_ts is not None:
+        image["captured_at_ts"] = target_captured_at_ts
+    meta["image"] = image
+
+    moved_raw = False
+    moved_thumb = False
+    try:
+        if old_raw_path is not None:
+            moved_raw = _move_file_if_present(old_raw_path, new_raw_path)
+        if old_thumb_path is not None:
+            moved_thumb = _move_file_if_present(old_thumb_path, new_thumb_path)
         meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        rollback = {
+            "meta_path": str(meta_path),
+            "original_meta_text": original_meta_text,
+            "old_raw_path": str(old_raw_path) if old_raw_path is not None else None,
+            "old_thumb_path": str(old_thumb_path) if old_thumb_path is not None else None,
+            "new_raw_path": str(new_raw_path),
+            "new_thumb_path": str(new_thumb_path),
+            "moved_raw": moved_raw,
+            "moved_thumb": moved_thumb,
+        }
+        _restore_moved_instance_meta(rollback)
+        raise
 
     _remove_dir_if_empty(old_raw_parent)
     _remove_dir_if_empty(old_thumb_parent)
@@ -203,6 +247,16 @@ def _move_instance_to_daily_meta(
         "pet_id": pet_id,
         "raw_path": str(new_raw_path),
         "thumb_path": str(new_thumb_path),
+        "rollback": {
+            "meta_path": str(meta_path),
+            "original_meta_text": original_meta_text,
+            "old_raw_path": str(old_raw_path) if old_raw_path is not None else None,
+            "old_thumb_path": str(old_thumb_path) if old_thumb_path is not None else None,
+            "new_raw_path": str(new_raw_path),
+            "new_thumb_path": str(new_thumb_path),
+            "moved_raw": moved_raw,
+            "moved_thumb": moved_thumb,
+        },
     }
 
 
@@ -869,8 +923,7 @@ async def move_exemplar_to_daily(request: Request, instance_id: str, body: Exemp
             }
         )
 
-    await run_in_threadpool(store.set_payload, [key], patch)
-    await run_in_threadpool(
+    move_result = await run_in_threadpool(
         _move_instance_to_daily_meta,
         key,
         str(payload.get("image_id") or "").strip() or None,
@@ -881,6 +934,16 @@ async def move_exemplar_to_daily(request: Request, instance_id: str, body: Exemp
         target_captured_at_iso,
         target_captured_at_ts,
     )
+    try:
+        await run_in_threadpool(store.set_payload, [key], patch)
+    except Exception:
+        rollback = move_result.get("rollback") if isinstance(move_result, dict) else None
+        if rollback:
+            try:
+                await run_in_threadpool(_restore_moved_instance_meta, rollback)
+            except Exception:
+                pass
+        raise
 
     return ExemplarMoveToDailyResponse(
         instance_id=key,
