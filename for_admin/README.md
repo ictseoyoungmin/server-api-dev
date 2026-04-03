@@ -37,3 +37,10 @@
 - 좌측 `Daily Ops` 패널에서 `버킷 확정` 후 `ZIP 다운로드`를 사용할 수 있습니다.
 - ZIP은 기본적으로 `{root_folder_name}/{pet_name}/{daily_images}` 구조로 내려갑니다.
 - 버킷 확정 전 `ZIP 다운로드`를 누르면 먼저 버킷 확정을 하라는 안내가 표시됩니다.
+
+
+## Download Guidance
+
+- Exemplar ZIP: pet 이름별 폴더로 정리된 query/reference 이미지셋입니다. 단일 개체가 선명하게 나온 이미지를 권장합니다.
+- Daily ZIP: 날짜 폴더 아래 원본 이미지와 paired `_anno.json`을 함께 제공합니다.
+- Daily annotation에는 이미지 내 각 개체의 `name`, `pet_id`, `bbox`, `assignment_status`가 포함됩니다.

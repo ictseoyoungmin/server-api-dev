@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from app.core.config import settings
 
@@ -15,7 +15,7 @@ def pet_registry_path() -> Path:
     return Path(settings.reid_storage_dir) / "registry" / "pets.json"
 
 
-def read_pet_name_map(_daycare_id: Optional[str] = None) -> Dict[str, str]:
+def read_pet_name_map() -> Dict[str, str]:
     path = pet_registry_path()
     if not path.exists():
         return {}

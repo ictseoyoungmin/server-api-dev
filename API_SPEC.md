@@ -580,3 +580,26 @@ Notes:
 - Older manifests without `images[]` are backward-compatible: server resolves `image_id -> meta -> raw_path` before zipping.
 - If `original_filename` is available, it is preferred as the file name inside the ZIP.
 
+
+
+## Daily ZIP Annotation Contract
+
+`GET /v1/daily/{day}/zip` returns a date-rooted archive that contains:
+- the original daily image file
+- a paired annotation file named `{image_stem}_anno.json`
+
+The annotation JSON includes:
+- `image_id`
+- `img_name`
+- `image_role`
+- `captured_at`
+- `width`
+- `height`
+- `instances[]`
+  - `instance_id`
+  - `name`
+  - `pet_id`
+  - `bbox`
+  - `assignment_status`
+
+Exemplar downloads remain image-only in the current implementation. Exemplar images are intended to be single-subject query/reference images.

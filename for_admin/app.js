@@ -50,10 +50,10 @@ function apiBase() {
   return value("apiBase").trim().replace(/\/$/, "");
 }
 
-function dailyZipHref() {
+function dailyZipHref(mode = "all") {
   const date = currentDate();
   if (!date) return "";
-  return `${apiBase()}/daily/${encodeURIComponent(date)}/zip`;
+  return `${apiBase()}/daily/${encodeURIComponent(date)}/zip${toQuery({ mode })}`;
 }
 
 function exemplarZipHref() {
@@ -94,12 +94,27 @@ window.handleDownloadExemplarsZip = function handleDownloadExemplarsZip() {
   window.open(exemplarZipHref(), "_blank", "noopener,noreferrer");
 };
 
+function closeDailyDownloadMenu() {
+  const menu = el("dailyDownloadMenu");
+  if (menu) menu.hidden = true;
+}
+
 window.handleDownloadDailyZip = function handleDownloadDailyZip() {
-  const href = dailyZipHref();
+  const menu = el("dailyDownloadMenu");
+  if (!currentDate()) {
+    alert("먼저 날짜를 선택하세요.");
+    return;
+  }
+  if (menu) menu.hidden = !menu.hidden;
+};
+
+window.handleDownloadDailyZipMode = function handleDownloadDailyZipMode(mode) {
+  const href = dailyZipHref(mode || "all");
   if (!href) {
     alert("먼저 날짜를 선택하세요.");
     return;
   }
+  closeDailyDownloadMenu();
   window.open(href, "_blank", "noopener,noreferrer");
 };
 
@@ -1293,6 +1308,9 @@ function bindHelpPopovers() {
   document.addEventListener("click", (event) => {
     if (event.target.closest(".help-anchor")) return;
     closeHelpPopovers();
+    if (!event.target.closest("#dailyDownloadMenu") && !event.target.closest("#btnDownloadDailyZip")) {
+      closeDailyDownloadMenu();
+    }
   });
 }
 
@@ -1451,8 +1469,19 @@ function bindEvents() {
     window.handleDownloadExemplarsZip();
   });
 
-  el("btnDownloadDailyZip")?.addEventListener("click", () => {
+  el("btnDownloadDailyZip")?.addEventListener("click", (event) => {
+    event.stopPropagation();
     window.handleDownloadDailyZip();
+  });
+
+  el("btnDownloadDailyAll")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    window.handleDownloadDailyZipMode("all");
+  });
+
+  el("btnDownloadDailyAccepted")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    window.handleDownloadDailyZipMode("accepted_only");
   });
 
   el("btnFolderUpload").addEventListener("click", async () => {

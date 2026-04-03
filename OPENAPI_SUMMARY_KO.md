@@ -1081,3 +1081,25 @@ Query Parameters:
 - 엔드포인트: `app/api/v1/endpoints/`
 - 스키마: `app/schemas/`
 - 설정: `app/core/config.py`
+
+
+## Daily ZIP Annotation Contract
+
+`GET /v1/daily/{day}/zip`는 날짜 폴더 아래에 다음을 함께 제공합니다.
+- 원본 daily 이미지 파일
+- 같은 stem을 사용하는 `{image_stem}_anno.json`
+
+`_anno.json`에는 다음이 포함됩니다.
+- `image_id`
+- `img_name`
+- `image_role`
+- `captured_at`
+- `width` / `height`
+- `instances[]`
+  - `instance_id`
+  - `name`
+  - `pet_id`
+  - `bbox`
+  - `assignment_status`
+
+Exemplar 다운로드는 현재 이미지 파일만 포함합니다. Exemplar 이미지는 query/reference 용도이므로 단일 개체 이미지 사용을 권장합니다.

@@ -21,8 +21,8 @@ def _get_store(request: Request) -> QdrantStore:
     return store
 
 
-def _read_pet_name_map(daycare_id: str | None = None) -> Dict[str, str]:
-    return read_pet_name_map(daycare_id)
+def _read_pet_name_map() -> Dict[str, str]:
+    return read_pet_name_map()
 
 
 @router.get("/pets", response_model=PetsListResponse)

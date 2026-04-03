@@ -21,6 +21,7 @@ from app.core.config import settings
 from app.schemas.images import GalleryImageItem, ImageMetaResponse, ImagesListResponse
 from app.schemas.ingest import BBox, InstanceOut
 from app.vector_db.qdrant_store import QdrantStore, build_filter
+from app.utils.pet_registry import read_pet_name_map
 
 router = APIRouter()
 
@@ -114,6 +115,45 @@ def _zip_temp_path(prefix: str) -> Path:
     export_dir = Path(settings.reid_storage_dir) / "exports"
     export_dir.mkdir(parents=True, exist_ok=True)
     return export_dir / f"{prefix}_{int(datetime.now(timezone.utc).timestamp())}.zip"
+
+
+def _annotation_name_for(file_name: str) -> str:
+    p = Path(file_name)
+    stem = p.stem or "image"
+    return f"{stem}_anno.json"
+
+
+def _daily_annotation_payload(meta: dict, pet_name_map: Dict[str, str]) -> dict:
+    image = meta.get("image") or {}
+    instances = []
+    for inst in meta.get("instances") or []:
+        pet_id = str(inst.get("pet_id") or "").strip() or None
+        name = pet_name_map.get(pet_id) if pet_id else None
+        bbox = inst.get("bbox") or {}
+        instances.append(
+            {
+                "instance_id": str(inst.get("instance_id") or "").strip() or None,
+                "name": name,
+                "pet_id": pet_id,
+                "bbox": {
+                    "x1": float(bbox.get("x1") or 0.0),
+                    "y1": float(bbox.get("y1") or 0.0),
+                    "x2": float(bbox.get("x2") or 0.0),
+                    "y2": float(bbox.get("y2") or 0.0),
+                },
+                "assignment_status": str(inst.get("assignment_status") or "UNREVIEWED").upper(),
+            }
+        )
+
+    return {
+        "image_id": str(image.get("image_id") or "").strip() or None,
+        "img_name": (str(image.get("original_filename") or "").strip() or None),
+        "image_role": str(image.get("image_role") or "DAILY").upper(),
+        "captured_at": image.get("captured_at"),
+        "width": int(image.get("width") or 0),
+        "height": int(image.get("height") or 0),
+        "instances": instances,
+    }
 
 
 def _day_range_ts(day: date_type) -> tuple[int, int]:
@@ -315,47 +355,61 @@ async def list_images(
 async def download_daily_zip(
     day: date_type,
     root_folder_name: Optional[str] = Query(default=None, description="Archive root folder name"),
+    mode: Literal["all", "accepted_only"] = Query(default="all", description="Download all daily images or only images with at least one ACCEPTED instance"),
 ):
     root_name = _safe_archive_name(root_folder_name, day.isoformat())
     zip_path = _zip_temp_path(f"daily_{day.isoformat()}")
     written = 0
     used_paths = set()
+    pet_name_map = read_pet_name_map()
 
     meta_dir = Path(settings.reid_storage_dir) / "meta"
     if not meta_dir.exists():
         raise HTTPException(status_code=404, detail="No daily image files available for zip export")
 
-    for meta_path in meta_dir.glob("img_*.json"):
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        img = meta.get("image") or {}
-        role = str(img.get("image_role") or "DAILY").upper()
-        if role == "SEED":
-            continue
-        ts = img.get("captured_at_ts") or img.get("uploaded_at_ts")
-        try:
-            biz_day = datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(business_tz()).date()
-        except Exception:
-            continue
-        if biz_day != day:
-            continue
-        src = Path(str(img.get("raw_path") or ""))
-        if not src.exists():
-            continue
-        base_name = str(img.get("original_filename") or "").strip() or src.name
-        file_name = _safe_archive_name(base_name, src.name)
-        arcname = f"{root_name}/{file_name}"
-        image_id = str(img.get("image_id") or "")
-        if arcname in used_paths:
-            file_name = _safe_archive_name(f"{image_id}_{base_name}", f"{image_id}_{src.name}")
+    with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+        for meta_path in meta_dir.glob("img_*.json"):
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            img = meta.get("image") or {}
+            role = str(img.get("image_role") or "DAILY").upper()
+            if role == "SEED":
+                continue
+            if mode == "accepted_only":
+                has_accepted = any(str(inst.get("assignment_status") or "").upper() == "ACCEPTED" for inst in (meta.get("instances") or []))
+                if not has_accepted:
+                    continue
+            ts = img.get("captured_at_ts") or img.get("uploaded_at_ts")
+            try:
+                biz_day = datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(business_tz()).date()
+            except Exception:
+                continue
+            if biz_day != day:
+                continue
+            src = Path(str(img.get("raw_path") or ""))
+            if not src.exists():
+                continue
+            base_name = str(img.get("original_filename") or "").strip() or src.name
+            file_name = _safe_archive_name(base_name, src.name)
             arcname = f"{root_name}/{file_name}"
-        used_paths.add(arcname)
-        mode = 'a' if written else 'w'
-        with zipfile.ZipFile(zip_path, mode, compression=zipfile.ZIP_DEFLATED) as zf:
+            image_id = str(img.get("image_id") or "")
+            if arcname in used_paths:
+                file_name = _safe_archive_name(f"{image_id}_{base_name}", f"{image_id}_{src.name}")
+                arcname = f"{root_name}/{file_name}"
+            used_paths.add(arcname)
             zf.write(src, arcname)
-        written += 1
+
+            anno_name = _annotation_name_for(file_name)
+            anno_arcname = f"{root_name}/{anno_name}"
+            if anno_arcname in used_paths:
+                anno_name = _annotation_name_for(f"{image_id}_{file_name}")
+                anno_arcname = f"{root_name}/{anno_name}"
+            used_paths.add(anno_arcname)
+            anno_payload = _daily_annotation_payload(meta, pet_name_map)
+            zf.writestr(anno_arcname, json.dumps(anno_payload, ensure_ascii=False, indent=2))
+            written += 1
 
     if written == 0:
         raise HTTPException(status_code=404, detail="No daily image files available for zip export")

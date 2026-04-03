@@ -1396,3 +1396,31 @@ body.inspector-open {
   background: rgba(166, 59, 45, 0.14);
   color: var(--rose);
 }
+
+
+.mini-action-menu {
+  position: absolute;
+  display: grid;
+  gap: 6px;
+  min-width: 168px;
+  padding: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.16);
+  border-radius: 14px;
+  background: #fffdf6;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.14);
+  z-index: 30;
+  margin-top: 8px;
+}
+
+.mini-action-menu[hidden] {
+  display: none;
+}
+
+.mini-action-menu button {
+  width: 100%;
+  text-align: left;
+}
+
+.action-help-group {
+  position: relative;
+}
