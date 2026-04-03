@@ -161,6 +161,40 @@ def _build_item_from_db(image_id: str, agg: dict, meta: Optional[dict]) -> Galle
     )
 
 
+def _pick_meta_ts(meta: dict) -> Optional[int]:
+    img = meta.get("image") or {}
+    ts = img.get("captured_at_ts") or img.get("uploaded_at_ts")
+    try:
+        return int(ts) if ts is not None else None
+    except Exception:
+        return None
+
+
+def _entry_from_meta(meta: dict) -> Optional[dict]:
+    img = meta.get("image") or {}
+    image_id = str(img.get("image_id") or "").strip()
+    if not image_id:
+        return None
+    image_role = str(img.get("image_role") or "DAILY").upper()
+    if image_role not in ("DAILY", "SEED"):
+        image_role = "DAILY"
+    instances = list(meta.get("instances") or [])
+    pet_hits = {
+        str(i.get("pet_id") or "").strip()
+        for i in instances
+        if str(i.get("assignment_status") or "").upper() == "ACCEPTED" and str(i.get("pet_id") or "").strip()
+    }
+    return {
+        "image_id": image_id,
+        "image_role": image_role,
+        "trainer_id": img.get("trainer_id"),
+        "captured_at_ts": _pick_meta_ts(meta),
+        "instance_count": int(img.get("instance_count") or len(instances) or 0),
+        "has_unclassified": _is_unclassified(meta),
+        "pet_hits": set(pet_hits),
+    }
+
+
 @router.get("/images", response_model=ImagesListResponse)
 async def list_images(
     request: Request,
@@ -225,6 +259,34 @@ async def list_images(
             entry["pet_hits"].add(p_pet_id)
         else:
             entry["has_unclassified"] = True
+
+    meta_dir = Path(settings.reid_storage_dir) / "meta"
+    if meta_dir.exists():
+        for meta_path in meta_dir.glob("img_*.json"):
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            entry = _entry_from_meta(meta)
+            if entry is None:
+                continue
+            if (not include_seed) and entry["image_role"] == "SEED":
+                continue
+            if from_ts is not None and to_ts is not None:
+                ts = entry.get("captured_at_ts")
+                if ts is None or int(ts) < from_ts or int(ts) >= to_ts:
+                    continue
+            existing = by_image.get(entry["image_id"])
+            if existing is None:
+                by_image[entry["image_id"]] = entry
+            else:
+                if existing.get("captured_at_ts") is None and entry.get("captured_at_ts") is not None:
+                    existing["captured_at_ts"] = entry.get("captured_at_ts")
+                if not existing.get("trainer_id") and entry.get("trainer_id"):
+                    existing["trainer_id"] = entry.get("trainer_id")
+                existing["instance_count"] = max(int(existing.get("instance_count") or 0), int(entry.get("instance_count") or 0))
+                existing["has_unclassified"] = bool(existing.get("has_unclassified")) or bool(entry.get("has_unclassified"))
+                existing["pet_hits"].update(entry.get("pet_hits") or set())
 
     filtered: List[dict] = []
     for _img_id, entry in by_image.items():

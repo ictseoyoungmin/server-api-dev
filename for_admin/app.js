@@ -41,6 +41,11 @@ function currentDate() {
   return value("workspaceDate").trim();
 }
 
+function workspaceCapturedAt() {
+  const date = currentDate();
+  return date ? `${date}T12:00:00` : "";
+}
+
 function apiBase() {
   return value("apiBase").trim().replace(/\/$/, "");
 }
@@ -1238,12 +1243,14 @@ async function folderUploadExemplars() {
 async function dailyUploadImages() {
   const input = el("dFiles");
   if (!input.files || !input.files.length) throw new Error("daily 이미지 파일을 선택하세요.");
+  const capturedAt = workspaceCapturedAt();
   let success = 0;
   let failed = 0;
   for (const file of Array.from(input.files)) {
     const fd = new FormData();
-        fd.append("trainer_id", "admin_dashboard");
+    fd.append("trainer_id", "admin_dashboard");
     fd.append("image_role", "DAILY");
+    if (capturedAt) fd.append("captured_at", capturedAt);
     fd.append("file", file);
     try {
       await api("/ingest", { method: "POST", body: fd });
@@ -1253,7 +1260,11 @@ async function dailyUploadImages() {
       log("Daily upload failed for file", { file: file.name, error: err.message });
     }
   }
-  log("Daily upload done", { succeeded: success, failed });
+  log("Daily upload done", { succeeded: success, failed, captured_at: capturedAt || null });
+  if (state.galleryView === "PET") {
+    state.galleryView = "ALL";
+    syncViewButtons();
+  }
   await loadGallery();
 }
 
