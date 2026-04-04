@@ -78,6 +78,17 @@ def _filter_small_detections(detections, image_role: str):
     return [d for d in detections if _bbox_area_ratio(d) >= min_area]
 
 
+def _detection_to_source_meta(det) -> dict:
+    bb = NormalizedBBox(x1=float(det.x1), y1=float(det.y1), x2=float(det.x2), y2=float(det.y2))
+    bb = pad_bbox(bb, settings.crop_padding)
+    return {
+        "class_id": int(det.class_id),
+        "species": _parse_species(int(det.class_id)),
+        "confidence": float(det.confidence),
+        "bbox": {"x1": bb.x1, "y1": bb.y1, "x2": bb.x2, "y2": bb.y2},
+    }
+
+
 def _get_embedder(request: Request):
     embedders = getattr(request.app.state, "embedders", None)
     if isinstance(embedders, dict):
@@ -184,11 +195,18 @@ async def ingest(
 
     # Optional minimum area filter for tiny detections.
     detections = _filter_small_detections(detections, image_role=image_role)
+    source_detections = [_detection_to_source_meta(d) for d in detections]
+    primary_source_detection_index: Optional[int] = None
 
     # Seed policy: one exemplar instance per image.
     # Prefer the detection nearest the image center, then the largest bbox, then confidence.
     if image_role == "SEED" and len(detections) > 1:
-        detections = [min(detections, key=_seed_detection_sort_key)]
+        primary_source_detection_index = min(
+            range(len(detections)), key=lambda idx: _seed_detection_sort_key(detections[idx])
+        )
+        detections = [detections[primary_source_detection_index]]
+    elif image_role == "SEED" and len(detections) == 1:
+        primary_source_detection_index = 0
 
     # Crop instances
     crops = []
@@ -296,6 +314,8 @@ async def ingest(
             "pipeline_version": "yolo26x+miewidv3+poc",
         },
         "instances": meta_instances,
+        "source_detections": source_detections if image_role == "SEED" else None,
+        "primary_source_detection_index": primary_source_detection_index if image_role == "SEED" else None,
     }
     (meta_dir / f"{image_id}.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 

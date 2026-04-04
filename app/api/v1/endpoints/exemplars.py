@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 import re
 import shutil
 import zipfile
@@ -152,6 +153,51 @@ def _restore_moved_instance_meta(rollback: dict) -> None:
         _remove_dir_if_empty(new_thumb_path.parent)
 
 
+def _build_daily_instances_from_source_detections(
+    source_detections: List[dict],
+    primary_index: Optional[int],
+    primary_instance_id: str,
+    assignment_status: Literal["UNREVIEWED", "ACCEPTED"],
+    pet_id: Optional[str],
+    updated_by: Optional[str],
+    now_ts: int,
+) -> List[dict]:
+    if not source_detections:
+        return []
+
+    resolved_primary_index = 0
+    if primary_index is not None and 0 <= int(primary_index) < len(source_detections):
+        resolved_primary_index = int(primary_index)
+
+    items: List[dict] = []
+    for idx, det in enumerate(source_detections):
+        bbox = det.get("bbox") or {}
+        is_primary = idx == resolved_primary_index
+        inst_assignment_status = assignment_status if is_primary else "UNREVIEWED"
+        inst_pet_id = pet_id if is_primary and assignment_status == "ACCEPTED" else None
+        items.append(
+            {
+                "instance_id": primary_instance_id if is_primary else f"ins_{uuid.uuid4()}",
+                "class_id": int(det.get("class_id") or 0),
+                "species": str(det.get("species") or "UNKNOWN"),
+                "confidence": float(det.get("confidence") or 0.0),
+                "bbox": {
+                    "x1": float(bbox.get("x1") or 0.0),
+                    "y1": float(bbox.get("y1") or 0.0),
+                    "x2": float(bbox.get("x2") or 0.0),
+                    "y2": float(bbox.get("y2") or 0.0),
+                },
+                "pet_id": inst_pet_id,
+                "assignment_status": inst_assignment_status,
+                "label_source": "MANUAL" if inst_assignment_status == "ACCEPTED" else None,
+                "label_confidence": 1.0 if inst_assignment_status == "ACCEPTED" else None,
+                "labeled_at_ts": now_ts if inst_assignment_status == "ACCEPTED" else None,
+                "labeled_by": updated_by if inst_assignment_status == "ACCEPTED" else None,
+            }
+        )
+    return items
+
+
 def _move_instance_to_daily_meta(
     instance_id: str,
     image_id: Optional[str],
@@ -189,18 +235,33 @@ def _move_instance_to_daily_meta(
     new_raw_path = base_dir / "images" / "daily" / f"{image_id_clean}{ext}"
     new_thumb_path = base_dir / "thumbs" / "daily" / f"{image_id_clean}.jpg"
 
+    source_detections = list(meta.get("source_detections") or [])
+    primary_source_detection_index = meta.get("primary_source_detection_index")
     changed = False
-    for inst in meta.get("instances") or []:
-        if str(inst.get("instance_id") or "") != instance_id:
-            continue
-        inst["pet_id"] = pet_id
-        inst["assignment_status"] = assignment_status
-        inst["label_source"] = "MANUAL" if assignment_status == "ACCEPTED" else None
-        inst["label_confidence"] = 1.0 if assignment_status == "ACCEPTED" else None
-        inst["labeled_at_ts"] = now_ts if assignment_status == "ACCEPTED" else None
-        inst["labeled_by"] = updated_by if assignment_status == "ACCEPTED" else None
+    if source_detections:
+        meta["instances"] = _build_daily_instances_from_source_detections(
+            source_detections=source_detections,
+            primary_index=(int(primary_source_detection_index) if primary_source_detection_index is not None else None),
+            primary_instance_id=instance_id,
+            assignment_status=assignment_status,
+            pet_id=pet_id,
+            updated_by=updated_by,
+            now_ts=now_ts,
+        )
+        image["instance_count"] = len(meta.get("instances") or [])
         changed = True
-        break
+    else:
+        for inst in meta.get("instances") or []:
+            if str(inst.get("instance_id") or "") != instance_id:
+                continue
+            inst["pet_id"] = pet_id
+            inst["assignment_status"] = assignment_status
+            inst["label_source"] = "MANUAL" if assignment_status == "ACCEPTED" else None
+            inst["label_confidence"] = 1.0 if assignment_status == "ACCEPTED" else None
+            inst["labeled_at_ts"] = now_ts if assignment_status == "ACCEPTED" else None
+            inst["labeled_by"] = updated_by if assignment_status == "ACCEPTED" else None
+            changed = True
+            break
     if not changed:
         raise RuntimeError(f"instance not found in meta for move-to-daily: {instance_id}")
 
