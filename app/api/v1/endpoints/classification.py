@@ -542,7 +542,7 @@ def _load_bucket_response(day: date, manifest: Optional[str]) -> GetBucketsRespo
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read manifest: {e}") from e
 
-    pet_name_map = _read_pet_name_map(None)
+    pet_name_map = _read_pet_name_map()
     buckets = [_bucket_item_from_raw(b, pet_name_map) for b in (data.get("buckets") or [])]
     qm_raw = data.get("quality_metrics") or {}
     quality_metrics = BucketQualityMetrics(
@@ -575,7 +575,7 @@ async def finalize_buckets(body: FinalizeBucketsRequest):
     now = datetime.now(timezone.utc)
     metas = _load_day_metas(day=body.date, tab="ALL", pet_id=None, include_seed=False)
     allowed_pet_ids = set(body.pet_ids) if body.pet_ids else None
-    pet_name_map = _read_pet_name_map(None)
+    pet_name_map = _read_pet_name_map()
 
     pet_map: Dict[str, Dict[str, FinalizeBucketImageItem]] = {}
     pet_instance_counts: Dict[str, int] = {}
@@ -693,7 +693,7 @@ async def download_buckets_zip(
     """Create and return a zip archive shaped as root_folder/pet_name/daily_images."""
     resp = _load_bucket_response(day=day, manifest=manifest)
     manifest_path = Path(resp.manifest_path)
-    pet_name_map = _read_pet_name_map(None)
+    pet_name_map = _read_pet_name_map()
     root_name = _safe_archive_name(root_folder_name, day.isoformat())
     zip_path = manifest_path.with_suffix('.zip')
 
