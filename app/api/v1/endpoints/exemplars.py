@@ -74,6 +74,47 @@ def _read_meta_safe(image_id: str) -> Optional[dict]:
         return None
 
 
+def _annotation_name_for(file_name: str) -> str:
+    p = Path(file_name)
+    stem = p.stem or "image"
+    return f"{stem}_anno.json"
+
+
+def _exemplar_annotation_payload(meta: dict, pet_name_map: Dict[str, str]) -> dict:
+    image = meta.get("image") or {}
+    instances = []
+    for inst in meta.get("instances") or []:
+        pet_id = str(inst.get("pet_id") or "").strip() or None
+        seed_pet_id = str(inst.get("seed_pet_id") or "").strip() or None
+        resolved_pet_id = seed_pet_id or pet_id
+        name = pet_name_map.get(resolved_pet_id) if resolved_pet_id else None
+        bbox = inst.get("bbox") or {}
+        instances.append(
+            {
+                "instance_id": str(inst.get("instance_id") or "").strip() or None,
+                "name": name,
+                "pet_id": resolved_pet_id,
+                "bbox": {
+                    "x1": float(bbox.get("x1") or 0.0),
+                    "y1": float(bbox.get("y1") or 0.0),
+                    "x2": float(bbox.get("x2") or 0.0),
+                    "y2": float(bbox.get("y2") or 0.0),
+                },
+                "assignment_status": str(inst.get("assignment_status") or "ACCEPTED").upper(),
+            }
+        )
+
+    return {
+        "image_id": str(image.get("image_id") or "").strip() or None,
+        "img_name": (str(image.get("original_filename") or "").strip() or None),
+        "image_role": str(image.get("image_role") or "SEED").upper(),
+        "captured_at": image.get("captured_at"),
+        "width": int(image.get("width") or 0),
+        "height": int(image.get("height") or 0),
+        "instances": instances,
+    }
+
+
 def _read_image_name(image_id: Optional[str]) -> Optional[str]:
     image_id_clean = str(image_id or "").strip()
     if not image_id_clean:
@@ -735,6 +776,15 @@ async def download_exemplars_zip(
                 arcname = f"{root_name}/{pet_folder}/{file_name}"
             used_paths.add(arcname)
             zf.write(raw_path, arcname)
+
+            anno_name = _annotation_name_for(file_name)
+            anno_arcname = f"{root_name}/{pet_folder}/{anno_name}"
+            if anno_arcname in used_paths:
+                anno_name = _annotation_name_for(f"{image_id}_{file_name}")
+                anno_arcname = f"{root_name}/{pet_folder}/{anno_name}"
+            used_paths.add(anno_arcname)
+            anno_payload = _exemplar_annotation_payload(meta, pet_name_map)
+            zf.writestr(anno_arcname, json.dumps(anno_payload, ensure_ascii=False, indent=2))
             written += 1
 
     if written == 0:
