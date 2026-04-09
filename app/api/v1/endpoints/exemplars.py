@@ -153,6 +153,12 @@ def _restore_moved_instance_meta(rollback: dict) -> None:
         _remove_dir_if_empty(new_thumb_path.parent)
 
 
+def _business_daily_folder_from_ts(ts: Optional[int]) -> str:
+    if ts is None:
+        return datetime.now(timezone.utc).astimezone(business_tz()).date().isoformat()
+    return datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(business_tz()).date().isoformat()
+
+
 def _build_daily_instances_from_source_detections(
     source_detections: List[dict],
     primary_index: Optional[int],
@@ -232,8 +238,9 @@ def _move_instance_to_daily_meta(
     ext = ".jpg"
     if old_raw_path is not None and old_raw_path.suffix:
         ext = old_raw_path.suffix.lower()
-    new_raw_path = base_dir / "images" / "daily" / f"{image_id_clean}{ext}"
-    new_thumb_path = base_dir / "thumbs" / "daily" / f"{image_id_clean}.jpg"
+    target_folder = _business_daily_folder_from_ts(target_captured_at_ts or image.get("captured_at_ts") or image.get("uploaded_at_ts"))
+    new_raw_path = base_dir / "images" / "daily" / target_folder / f"{image_id_clean}{ext}"
+    new_thumb_path = base_dir / "thumbs" / "daily" / target_folder / f"{image_id_clean}.jpg"
 
     source_detections = list(meta.get("source_detections") or [])
     primary_source_detection_index = meta.get("primary_source_detection_index")

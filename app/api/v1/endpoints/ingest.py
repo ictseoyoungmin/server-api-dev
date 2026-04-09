@@ -89,6 +89,10 @@ def _detection_to_source_meta(det) -> dict:
     }
 
 
+def _business_date_folder(dt: datetime) -> str:
+    return dt.astimezone(business_tz()).date().isoformat()
+
+
 def _get_embedder(request: Request):
     embedders = getattr(request.app.state, "embedders", None)
     if isinstance(embedders, dict):
@@ -159,8 +163,9 @@ async def ingest(
         raw_dir = base_dir / "images" / role_dir / pet_dir
         thumb_dir = base_dir / "thumbs" / role_dir / pet_dir
     else:
-        raw_dir = base_dir / "images" / role_dir
-        thumb_dir = base_dir / "thumbs" / role_dir
+        daily_folder = _business_date_folder(cap_dt or uploaded_at)
+        raw_dir = base_dir / "images" / role_dir / daily_folder
+        thumb_dir = base_dir / "thumbs" / role_dir / daily_folder
     meta_dir = base_dir / "meta"
     raw_dir.mkdir(parents=True, exist_ok=True)
     thumb_dir.mkdir(parents=True, exist_ok=True)
