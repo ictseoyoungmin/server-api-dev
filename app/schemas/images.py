@@ -31,3 +31,9 @@ class ImagesListResponse(BaseModel):
 class ImageMetaResponse(BaseModel):
     image: GalleryImageItem
     instances: List[InstanceOut]
+
+
+class ImageDeleteResponse(BaseModel):
+    image_id: str
+    deleted_points: int = 0
+    deleted_files: bool = False

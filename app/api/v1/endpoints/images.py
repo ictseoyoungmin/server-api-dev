@@ -13,12 +13,13 @@ from typing import Dict, List, Literal, Optional
 from app.utils.timezone import business_tz
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from qdrant_client.http import models as qm
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
-from app.schemas.images import GalleryImageItem, ImageMetaResponse, ImagesListResponse
+from app.schemas.images import GalleryImageItem, ImageDeleteResponse, ImageMetaResponse, ImagesListResponse
 from app.schemas.ingest import BBox, InstanceOut
 from app.vector_db.qdrant_store import QdrantStore, build_filter
 from app.utils.pet_registry import read_pet_name_map
@@ -84,6 +85,66 @@ def _read_meta_safe(image_id: str) -> Optional[dict]:
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def _delete_file_if_exists(path_value: Optional[object]) -> bool:
+    raw = str(path_value or "").strip()
+    if not raw:
+        return False
+    path = Path(raw)
+    try:
+        if path.exists():
+            path.unlink()
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def _remove_dir_if_empty(path_value: Optional[object]) -> None:
+    raw = str(path_value or "").strip()
+    if not raw:
+        return
+    path = Path(raw)
+    try:
+        if path.exists() and path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+    except Exception:
+        return
+
+
+def _delete_daily_image_assets(image_id: str, meta: dict) -> bool:
+    image = meta.get("image") or {}
+    raw_path = Path(str(image.get("raw_path") or "").strip()) if str(image.get("raw_path") or "").strip() else None
+    thumb_path = Path(str(image.get("thumb_path") or "").strip()) if str(image.get("thumb_path") or "").strip() else None
+    meta_path = _meta_path(image_id)
+
+    deleted_any = False
+    if raw_path is not None:
+        deleted_any = _delete_file_if_exists(raw_path) or deleted_any
+    if thumb_path is not None:
+        deleted_any = _delete_file_if_exists(thumb_path) or deleted_any
+    if meta_path.exists():
+        try:
+            meta_path.unlink()
+            deleted_any = True
+        except Exception:
+            pass
+
+    if raw_path is not None:
+        _remove_dir_if_empty(raw_path.parent)
+    if thumb_path is not None:
+        _remove_dir_if_empty(thumb_path.parent)
+    return deleted_any
+
+
+def _instance_ids_for_image(meta: dict) -> List[str]:
+    out: List[str] = []
+    for inst in meta.get("instances") or []:
+        iid = str(inst.get("instance_id") or "").strip()
+        if iid:
+            out.append(iid)
+    return out
 
 
 def _is_unclassified(meta: dict) -> bool:
@@ -465,3 +526,29 @@ def get_image_meta(image_id: str):
             )
         )
     return ImageMetaResponse(image=item, instances=instances)
+
+
+@router.delete("/images/{image_id}", response_model=ImageDeleteResponse)
+async def delete_daily_image(
+    request: Request,
+    image_id: str,
+    updated_by: Optional[str] = Query(default=None),
+):
+    meta = _read_meta(image_id)
+    image = meta.get("image") or {}
+    image_role = str(image.get("image_role") or "DAILY").upper()
+    if image_role != "DAILY":
+        raise HTTPException(status_code=400, detail="Only DAILY images can be deleted here")
+
+    store = _get_store(request)
+    instance_ids = _instance_ids_for_image(meta)
+    if not instance_ids:
+        qf = qm.Filter(must=[qm.FieldCondition(key="image_id", match=qm.MatchValue(value=image_id))])
+        points = await run_in_threadpool(store.scroll_points, qf, 1000, False)
+        instance_ids = [store.external_instance_id(str(p.point_id)) for p in points if str((p.payload or {}).get("image_id") or "").strip() == image_id]
+
+    if instance_ids:
+        await run_in_threadpool(store.delete_points, instance_ids)
+
+    deleted_files = await run_in_threadpool(_delete_daily_image_assets, image_id, meta)
+    return ImageDeleteResponse(image_id=image_id, deleted_points=len(instance_ids), deleted_files=deleted_files)

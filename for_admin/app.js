@@ -364,6 +364,23 @@ ${displayImageName(target)}`);
   }
 }
 
+async function deleteDailyImage(imageId, imgName) {
+  const imageIdClean = String(imageId || "").trim();
+  if (!imageIdClean) return;
+  const ok = window.confirm(`daily 이미지를 완전히 삭제할까요?
+${String(imgName || imageIdClean)}`);
+  if (!ok) return;
+  const data = await api(`/images/${encodeURIComponent(imageIdClean)}${toQuery({ updated_by: "admin_dashboard" })}`, { method: "DELETE" });
+  log("Daily image deleted", data);
+  state.selectedImageIds.delete(imageIdClean);
+  state.imageMetaCache.delete(imageIdClean);
+  if (state.inspectedImageId === imageIdClean) {
+    state.inspectedImageId = null;
+    renderInspector(null);
+  }
+  await loadGallery();
+}
+
 function setFolderSeedPolicy(policy) {
   state.folderSeedPolicy = ["append", "create_new", "fail"].includes(policy) ? policy : "append";
   renderFolderSeedPolicy();
@@ -614,6 +631,7 @@ function renderInspector(meta) {
         <div class="pet-sub filename" title="${escapeHtml(meta.image?.img_name || meta.image?.image_id || "")}"><code>${escapeHtml(meta.image?.img_name || meta.image?.image_id || "")}</code></div>
         <div class="pet-sub">captured_at=${meta.image?.captured_at || "n/a"}</div>
         <div class="pet-sub">role=${imageRole || "UNKNOWN"}</div>
+        ${isSeedImage ? "" : `<div class="instance-action-buttons detail-image-actions"><button class="danger" data-image-delete="${escapeHtml(String(meta.image?.image_id || ""))}">이미지 완전 삭제</button></div>`}
       </div>
     </div>
     <div class="instance-list"></div>
@@ -728,6 +746,16 @@ function renderInspector(meta) {
       try {
         if (!confirm("이 검출 instance를 제거할까요? 원본 이미지는 유지됩니다.")) return;
         await withButtonBusy(btn, () => removeInspectorInstance(btn.dataset.instanceRemove));
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+    });
+  });
+  pane.querySelectorAll("[data-image-delete]").forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      try {
+        await withButtonBusy(btn, () => deleteDailyImage(btn.dataset.imageDelete, meta.image?.img_name || meta.image?.image_id));
       } catch (err) {
         alert(err.message || String(err));
       }
