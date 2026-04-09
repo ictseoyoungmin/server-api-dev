@@ -1520,8 +1520,14 @@ function bootstrapDefaults() {
 }
 
 function bindEvents() {
-  el("btnWorkspaceDateToggle")?.addEventListener("click", (event) => {
+  el("btnWorkspaceDateToggle")?.addEventListener("click", async (event) => {
     event.stopPropagation();
+    const isOpening = !isWorkspaceCalendarOpen();
+    if (isOpening) {
+      const monthKey = state.calendarMonth || monthKeyFromDate(currentDate()) || monthKeyFromDate(new Date().toISOString().slice(0, 10));
+      state.calendarMonth = monthKey;
+      await loadCalendarMonth(monthKey);
+    }
     toggleWorkspaceCalendar();
   });
 
@@ -1780,7 +1786,10 @@ async function init() {
   syncViewButtons();
   log("Admin workspace ready");
   try {
-    await loadQdrantStatus();
+    await Promise.all([
+      loadQdrantStatus(),
+      loadCalendarMonth(state.calendarMonth || monthKeyFromDate(currentDate() || new Date().toISOString().slice(0, 10))),
+    ]);
   } catch (err) {
     log("Initial bootstrap skipped", { error: err.message });
   }
