@@ -574,13 +574,81 @@ function explainQuickUploadError(err) {
     const detail = parsed?.detail;
     if (detail?.code === "PET_NAME_CONFLICT") {
       const existing = Array.isArray(detail.existing_pet_ids) ? detail.existing_pet_ids.join(", ") : "";
-      return `${detail.message}${existing ? `\n기존 pet_id: ${existing}` : ""}`;
+      return `${detail.message}${existing ? `
+기존 pet_id: ${existing}` : ""}`;
     }
     if (typeof detail === "string") return detail;
   } catch (_err) {
     // no-op
   }
   return err?.message || "업로드 중 오류가 발생했습니다.";
+}
+
+function looksLikeHtmlErrorMessage(message) {
+  const text = String(message || "").trim();
+  if (!text) return false;
+  return text.startsWith("<!DOCTYPE html") || text.startsWith("<html") || text.includes("<!--[if IE");
+}
+
+function explainFolderUploadError(err, context = {}) {
+  const raw = String(err?.message || "").trim();
+  if (looksLikeHtmlErrorMessage(raw)) {
+    const batchText = context.batchIndex && context.batchCount
+      ? ` (배치 ${context.batchIndex}/${context.batchCount}, ${context.fileCount || 0}장)`
+      : "";
+    return `서버 앞단에서 HTML 오류 페이지를 반환했습니다${batchText}.
+업로드 요청이 너무 크거나 오래 걸렸을 수 있습니다. 폴더를 더 작게 나누어 다시 시도해 주세요.`;
+  }
+  return raw || "폴더 업로드 중 오류가 발생했습니다.";
+}
+
+function folderGroupKey(file) {
+  const rel = String(file?.webkitRelativePath || file?.name || "");
+  const parts = rel.split("/").filter(Boolean);
+  return parts.length >= 2 ? parts[parts.length - 2] : "__root__";
+}
+
+function buildFolderUploadBatches(files, maxFilesPerBatch = 24) {
+  const grouped = [];
+  const byKey = new Map();
+  files.forEach((file) => {
+    const key = folderGroupKey(file);
+    if (!byKey.has(key)) {
+      const group = { key, files: [] };
+      byKey.set(key, group);
+      grouped.push(group);
+    }
+    byKey.get(key).files.push(file);
+  });
+
+  const batches = [];
+  let currentFiles = [];
+  let currentFolderKeys = [];
+  let currentCount = 0;
+  grouped.forEach((group) => {
+    const size = group.files.length;
+    if (currentFiles.length && currentCount + size > maxFilesPerBatch) {
+      batches.push({ files: currentFiles, folderKeys: currentFolderKeys });
+      currentFiles = [];
+      currentFolderKeys = [];
+      currentCount = 0;
+    }
+    if (size > maxFilesPerBatch) {
+      if (currentFiles.length) {
+        batches.push({ files: currentFiles, folderKeys: currentFolderKeys });
+        currentFiles = [];
+        currentFolderKeys = [];
+        currentCount = 0;
+      }
+      batches.push({ files: group.files.slice(), folderKeys: [group.key] });
+      return;
+    }
+    currentFiles.push(...group.files);
+    currentFolderKeys.push(group.key);
+    currentCount += size;
+  });
+  if (currentFiles.length) batches.push({ files: currentFiles, folderKeys: currentFolderKeys });
+  return batches;
 }
 
 function clamp01(v) {
@@ -1407,20 +1475,75 @@ async function quickUploadExemplar() {
 
 async function folderUploadExemplars() {
   const folderInput = el("fFolder");
+  const uploadButton = el("btnFolderUpload");
+  const originalLabel = uploadButton?.textContent || "폴더 일괄 등록";
   if (!folderInput.files || !folderInput.files.length) throw new Error("pet 폴더를 선택하세요.");
-  const fd = new FormData();
-    fd.append("updated_by", "admin_dashboard");
-  fd.append("sync_label", "true");
-  fd.append("apply_to_all_instances", "false");
-  fd.append("skip_on_error", "true");
-  fd.append("existing_name_policy", state.folderSeedPolicy || "append");
-  Array.from(folderInput.files).forEach((file) => {
-    fd.append("files", file);
-    fd.append("relative_paths", file.webkitRelativePath || file.name);
-  });
-  const data = await api("/exemplars/upload-folder", { method: "POST", body: fd });
-  log("Seed folder upload done", { succeeded: data.succeeded, failed: data.failed, existing_name_policy: state.folderSeedPolicy });
-  await loadWorkspace();
+  const files = Array.from(folderInput.files);
+  const uniqueFolderCount = new Set(files.map((file) => folderGroupKey(file))).size;
+  const batches = buildFolderUploadBatches(files, 24);
+  let succeeded = 0;
+  let failed = 0;
+  let completedFolders = 0;
+  const results = [];
+
+  try {
+    for (let index = 0; index < batches.length; index += 1) {
+      const batch = batches[index];
+      const batchFiles = batch.files || [];
+      const folderCount = Array.isArray(batch.folderKeys) ? batch.folderKeys.length : 0;
+      if (uploadButton) {
+        const nextCompleted = Math.min(uniqueFolderCount, completedFolders + folderCount);
+        uploadButton.textContent = `폴더 ${nextCompleted}/${uniqueFolderCount}`;
+      }
+      const fd = new FormData();
+      fd.append("updated_by", "admin_dashboard");
+      fd.append("sync_label", "true");
+      fd.append("apply_to_all_instances", "false");
+      fd.append("skip_on_error", "true");
+      fd.append("existing_name_policy", state.folderSeedPolicy || "append");
+      batchFiles.forEach((file) => {
+        fd.append("files", file);
+        fd.append("relative_paths", file.webkitRelativePath || file.name);
+      });
+      try {
+        const data = await api("/exemplars/upload-folder", { method: "POST", body: fd });
+        succeeded += Number(data.succeeded || 0);
+        failed += Number(data.failed || 0);
+        completedFolders += folderCount;
+        if (Array.isArray(data.results)) results.push(...data.results);
+        log("Seed folder upload batch done", {
+          batch: index + 1,
+          batch_count: batches.length,
+          folder_count: folderCount,
+          completed_folders: completedFolders,
+          total_folders: uniqueFolderCount,
+          file_count: batchFiles.length,
+          succeeded: data.succeeded,
+          failed: data.failed,
+          existing_name_policy: state.folderSeedPolicy,
+        });
+      } catch (err) {
+        throw new Error(explainFolderUploadError(err, {
+          batchIndex: index + 1,
+          batchCount: batches.length,
+          fileCount: batchFiles.length,
+        }));
+      }
+    }
+
+    log("Seed folder upload done", {
+      total_files: files.length,
+      total_folders: uniqueFolderCount,
+      batch_count: batches.length,
+      succeeded,
+      failed,
+      existing_name_policy: state.folderSeedPolicy,
+      results_count: results.length,
+    });
+    await loadWorkspace();
+  } finally {
+    if (uploadButton) uploadButton.textContent = originalLabel;
+  }
 }
 
 async function dailyUploadImages() {
