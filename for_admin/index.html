@@ -154,23 +154,6 @@
               </span>
               <input id="autoAcceptThreshold" type="number" step="0.01" min="0" max="1" value="0.6" />
             </label>
-            <label>
-              <span class="field-help-row">
-                <span>Select Mode</span>
-                <span class="help-anchor">
-                  <button type="button" class="help-trigger" data-help-target="helpSelectMode" aria-expanded="false" aria-controls="helpSelectMode">?</button>
-                  <span id="helpSelectMode" class="help-popover help-popover-right" hidden>
-                    <strong>설명</strong>
-                    <p>이미지 단위 라벨링 시 어떤 instance를 선택할지 정합니다.</p>
-                    <p><code>BEST_CONFIDENCE</code>는 대표 1개, <code>ALL</code>은 검출된 전체 instance에 적용합니다.</p>
-                  </span>
-                </span>
-              </span>
-              <select id="selectionMode">
-                <option value="BEST_CONFIDENCE">BEST_CONFIDENCE</option>
-                <option value="ALL">ALL</option>
-              </select>
-            </label>
           </div>
           <div class="inline-actions wrap daily-ops-actions">
             <span class="action-help-group">
@@ -263,7 +246,7 @@
             <div class="inline-actions wrap">
               <button id="btnSelectAll">전체 선택</button>
               <button id="btnClearSelection">전체 해제</button>
-              <button id="btnAssignSelected" class="primary">현재 pet에 포함</button>
+              <button id="btnAssignSelected" class="primary" disabled>현재 pet에 포함</button>
               <button id="btnClearSelected">미지정으로 되돌리기</button>
             </div>
           </div>

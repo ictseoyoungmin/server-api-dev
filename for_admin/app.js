@@ -298,6 +298,22 @@ function selectedCountText() {
   return `선택된 이미지 ${state.selectedImageIds.size}장`;
 }
 
+function getSingleSelectedGalleryItem() {
+  if (state.selectedImageIds.size !== 1) return null;
+  const [imageId] = Array.from(state.selectedImageIds);
+  return state.originalGalleryItems.find((item) => item.image_id === imageId) || null;
+}
+
+function syncSelectionActionButtons() {
+  const assignButton = el("btnAssignSelected");
+  if (assignButton) {
+    const selectedItem = getSingleSelectedGalleryItem();
+    const instanceCount = Number(selectedItem?.instance_count || 0);
+    const canAssign = !!selectedItem && instanceCount === 1 && !!state.activePetId;
+    assignButton.disabled = !canAssign;
+  }
+}
+
 function currentTabForApi() {
   if (state.galleryView === "PET") return "PET";
   if (state.galleryView === "UNCLASSIFIED") return "UNCLASSIFIED";
@@ -742,6 +758,7 @@ function renderGallery() {
   const totalText = state.galleryTotalCount > 0 ? `${visibleStart}-${visibleEnd}/${state.galleryTotalCount}` : `${state.galleryItems.length}`;
   const summaryText = `${totalText} images · view=${state.galleryView}${state.activePetId ? ` · pet=${state.activePetId}` : ""}`;
   el("selectionMeta").textContent = selectedCountText();
+  syncSelectionActionButtons();
   renderGalleryPagination(summaryText);
 
   if (!state.galleryItems.length) {
@@ -1538,7 +1555,7 @@ async function labelSelectedImages(action) {
       labeled_by: "admin_dashboard",
       confidence: 1.0,
       source: "MANUAL",
-      select_mode: value("selectionMode") || "BEST_CONFIDENCE",
+      select_mode: "BEST_CONFIDENCE",
     }),
   });
   log("Applied image label action", { action, count: data.items.length, pet_id: state.activePetId });
@@ -1969,6 +1986,11 @@ function bindEvents() {
   });
 
   el("inspectorBackdrop")?.addEventListener("click", () => {
+    closeInspectorDrawer();
+  });
+
+  el("inspectorDrawer")?.addEventListener("pointerdown", (event) => {
+    if (event.target.closest(".inspector-drawer-panel")) return;
     closeInspectorDrawer();
   });
 
