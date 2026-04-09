@@ -459,7 +459,7 @@ async def list_images(
         meta = _read_meta_safe(str(e["image_id"]))
         items.append(_build_item_from_db(str(e["image_id"]), e, meta))
 
-    return ImagesListResponse(count=len(items), items=items)
+    return ImagesListResponse(count=len(filtered), items=items)
 
 
 @router.get("/daily/{day}/zip")

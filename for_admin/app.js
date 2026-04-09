@@ -8,6 +8,7 @@ const state = {
   galleryView: "ALL",
   galleryItems: [],
   originalGalleryItems: [],
+  galleryTotalCount: 0,
   selectedImageIds: new Set(),
   imageMetaCache: new Map(),
   inspectedImageId: null,
@@ -733,7 +734,8 @@ function renderGallery() {
   const grid = el("galleryGrid");
   const meta = el("galleryMeta");
   grid.innerHTML = "";
-  meta.textContent = `${state.galleryItems.length} images · view=${state.galleryView}${state.activePetId ? ` · pet=${state.activePetId}` : ""}`;
+  const totalText = state.galleryTotalCount > state.galleryItems.length ? `${state.galleryItems.length}/${state.galleryTotalCount}` : `${state.galleryItems.length}`;
+  meta.textContent = `${totalText} images · view=${state.galleryView}${state.activePetId ? ` · pet=${state.activePetId}` : ""}`;
   el("selectionMeta").textContent = selectedCountText();
 
   if (!state.galleryItems.length) {
@@ -1237,22 +1239,43 @@ async function loadGallery() {
   if (state.galleryView === "PET" && !state.activePetId) {
     throw new Error("PET bucket view는 pet 버튼 선택 후 사용할 수 있습니다.");
   }
-  const params = {
+  const pageSize = 100;
+  const baseParams = {
     date: currentDate() || null,
     tab: currentTabForApi(),
     pet_id: state.galleryView === "PET" ? state.activePetId : null,
     include_seed: false,
-    limit: 500,
-    offset: 0,
+    limit: pageSize,
   };
-  const data = await api(`/images${toQuery(params)}`);
-  state.galleryItems = data.items || [];
+
+  let offset = 0;
+  let totalCount = 0;
+  const allItems = [];
+  while (true) {
+    const data = await api(`/images${toQuery({ ...baseParams, offset })}`);
+    const pageItems = Array.isArray(data.items) ? data.items : [];
+    totalCount = Number(data.count || 0);
+    allItems.push(...pageItems);
+    if (!pageItems.length) break;
+    offset += pageItems.length;
+    if (allItems.length >= totalCount) break;
+    if (pageItems.length < pageSize) break;
+  }
+
+  state.galleryItems = allItems;
   state.originalGalleryItems = [...state.galleryItems];
+  state.galleryTotalCount = Math.max(totalCount, allItems.length);
   state.selectedImageIds.clear();
   state.imageMetaCache.clear();
   state.searchScores = {};
   renderGallery();
-  log("Loaded gallery", { view: state.galleryView, count: state.galleryItems.length, pet_id: state.activePetId });
+  log("Loaded gallery", {
+    view: state.galleryView,
+    count: state.galleryItems.length,
+    total_count: state.galleryTotalCount,
+    pages: Math.max(1, Math.ceil(state.galleryItems.length / pageSize)),
+    pet_id: state.activePetId,
+  });
 }
 
 async function inspectImage(imageId) {
