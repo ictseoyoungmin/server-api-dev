@@ -9,6 +9,8 @@ const state = {
   galleryItems: [],
   originalGalleryItems: [],
   galleryTotalCount: 0,
+  galleryPage: 1,
+  galleryPageSize: 100,
   selectedImageIds: new Set(),
   imageMetaCache: new Map(),
   inspectedImageId: null,
@@ -734,9 +736,13 @@ function renderGallery() {
   const grid = el("galleryGrid");
   const meta = el("galleryMeta");
   grid.innerHTML = "";
-  const totalText = state.galleryTotalCount > state.galleryItems.length ? `${state.galleryItems.length}/${state.galleryTotalCount}` : `${state.galleryItems.length}`;
-  meta.textContent = `${totalText} images · view=${state.galleryView}${state.activePetId ? ` · pet=${state.activePetId}` : ""}`;
+  const pageSize = Math.max(1, Number(state.galleryPageSize || 100));
+  const visibleStart = state.originalGalleryItems.length ? ((state.galleryPage - 1) * pageSize) + 1 : 0;
+  const visibleEnd = state.originalGalleryItems.length ? ((state.galleryPage - 1) * pageSize) + state.galleryItems.length : 0;
+  const totalText = state.galleryTotalCount > 0 ? `${visibleStart}-${visibleEnd}/${state.galleryTotalCount}` : `${state.galleryItems.length}`;
+  const summaryText = `${totalText} images · view=${state.galleryView}${state.activePetId ? ` · pet=${state.activePetId}` : ""}`;
   el("selectionMeta").textContent = selectedCountText();
+  renderGalleryPagination(summaryText);
 
   if (!state.galleryItems.length) {
     grid.innerHTML = '<div class="empty-state">표시할 daily 이미지가 없습니다.</div>';
@@ -1170,9 +1176,75 @@ function syncViewButtons() {
   });
 }
 
+function applyGalleryPageSlice() {
+  const pageSize = Math.max(1, Number(state.galleryPageSize || 100));
+  const totalPages = Math.max(1, Math.ceil(state.originalGalleryItems.length / pageSize));
+  state.galleryPage = Math.min(Math.max(1, Number(state.galleryPage || 1)), totalPages);
+  const start = (state.galleryPage - 1) * pageSize;
+  state.galleryItems = state.originalGalleryItems.slice(start, start + pageSize);
+}
+
+function renderGalleryPagination(summaryText) {
+  const box = el("galleryMeta");
+  if (!box) return;
+  const totalItems = state.originalGalleryItems.length;
+  const pageSize = Math.max(1, Number(state.galleryPageSize || 100));
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+
+  if (totalItems <= pageSize) {
+    box.innerHTML = `<span class="gallery-summary-text">${escapeHtml(summaryText)}</span>`;
+    return;
+  }
+
+  box.innerHTML = `
+    <div class="gallery-pagination">
+      <button id="btnGalleryPrevPage" type="button" class="gallery-page-button" ${state.galleryPage <= 1 ? "disabled" : ""}>&lt;</button>
+      <span class="gallery-page-status">
+        <input id="galleryPageInput" class="gallery-page-input" type="number" min="1" max="${totalPages}" value="${state.galleryPage}" />
+        / ${totalPages}
+      </span>
+      <button id="btnGalleryNextPage" type="button" class="gallery-page-button" ${state.galleryPage >= totalPages ? "disabled" : ""}>&gt;</button>
+    </div>
+    <span class="gallery-summary-text">${escapeHtml(summaryText)}</span>
+  `;
+
+  box.querySelector("#btnGalleryPrevPage")?.addEventListener("click", () => {
+    if (state.galleryPage <= 1) return;
+    state.galleryPage -= 1;
+    applyGalleryPageSlice();
+    renderGallery();
+  });
+
+  box.querySelector("#btnGalleryNextPage")?.addEventListener("click", () => {
+    if (state.galleryPage >= totalPages) return;
+    state.galleryPage += 1;
+    applyGalleryPageSlice();
+    renderGallery();
+  });
+
+  const pageInput = box.querySelector("#galleryPageInput");
+  const commitPageInput = () => {
+    const nextPage = Math.min(totalPages, Math.max(1, Number(pageInput?.value || state.galleryPage)));
+    if (Number.isNaN(nextPage)) {
+      if (pageInput) pageInput.value = String(state.galleryPage);
+      return;
+    }
+    state.galleryPage = nextPage;
+    applyGalleryPageSlice();
+    renderGallery();
+  };
+  pageInput?.addEventListener("change", commitPageInput);
+  pageInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitPageInput();
+    }
+  });
+}
+
 function resetSearchRanking() {
   state.searchScores = {};
-  state.galleryItems = [...state.originalGalleryItems];
+  applyGalleryPageSlice();
 }
 
 function selectAllVisibleImages() {
@@ -1262,18 +1334,19 @@ async function loadGallery() {
     if (pageItems.length < pageSize) break;
   }
 
-  state.galleryItems = allItems;
-  state.originalGalleryItems = [...state.galleryItems];
+  state.originalGalleryItems = allItems;
   state.galleryTotalCount = Math.max(totalCount, allItems.length);
+  state.galleryPage = 1;
+  applyGalleryPageSlice();
   state.selectedImageIds.clear();
   state.imageMetaCache.clear();
   state.searchScores = {};
   renderGallery();
   log("Loaded gallery", {
     view: state.galleryView,
-    count: state.galleryItems.length,
+    count: state.originalGalleryItems.length,
     total_count: state.galleryTotalCount,
-    pages: Math.max(1, Math.ceil(state.galleryItems.length / pageSize)),
+    pages: Math.max(1, Math.ceil(state.originalGalleryItems.length / pageSize)),
     pet_id: state.activePetId,
   });
 }
@@ -1429,7 +1502,7 @@ async function runSimilarSearch() {
   state.searchScores = Object.fromEntries((data.results || []).map((item) => [item.image_id, Number(item.score)]));
   const selectedOrder = new Map(imageIds.map((imageId, idx) => [imageId, idx]));
   const order = new Map((data.results || []).map((item, idx) => [item.image_id, idx]));
-  state.galleryItems = [...state.originalGalleryItems].sort((a, b) => {
+  state.originalGalleryItems = [...state.originalGalleryItems].sort((a, b) => {
     const aSelected = selectedOrder.has(a.image_id);
     const bSelected = selectedOrder.has(b.image_id);
     if (aSelected && bSelected) {
@@ -1443,6 +1516,8 @@ async function runSimilarSearch() {
     if (ai !== bi) return ai - bi;
     return 0;
   });
+  state.galleryPage = 1;
+  applyGalleryPageSlice();
   renderGallery();
   log("Similar ranking applied", data.query_debug);
 }
