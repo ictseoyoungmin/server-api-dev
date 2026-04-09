@@ -683,6 +683,29 @@ h2 {
   align-items: end;
 }
 
+.gallery-filter-bar {
+  border-top: 1px solid var(--line);
+  padding: 12px 0;
+}
+
+.gallery-filter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+}
+
+.gallery-filter-controls label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+.gallery-filter-controls select {
+  min-width: 140px;
+}
+
 .selection-bar {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
@@ -1345,7 +1368,8 @@ body.inspector-open {
     align-items: stretch;
   }
 
-  .search-controls {
+  .search-controls,
+  .gallery-filter-controls {
     width: 100%;
   }
 
@@ -1384,7 +1408,8 @@ body.inspector-open {
   }
 
   .grid.two,
-  .search-controls {
+  .search-controls,
+  .gallery-filter-controls {
     grid-template-columns: 1fr;
     display: grid;
   }

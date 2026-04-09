@@ -241,6 +241,26 @@
             </div>
           </div>
 
+          <div class="gallery-filter-bar">
+            <div class="gallery-filter-controls">
+              <label>상태
+                <select id="galleryStateFilter">
+                  <option value="ALL">전체</option>
+                  <option value="UNREVIEWED">미분류</option>
+                  <option value="ACCEPTED">ACCEPTED</option>
+                </select>
+              </label>
+              <label>개체 수
+                <select id="galleryMultiplicityFilter">
+                  <option value="ALL">전체</option>
+                  <option value="SINGLE">SINGLE</option>
+                  <option value="MULTI">MULTI</option>
+                </select>
+              </label>
+              <button id="btnResetGalleryFilters" type="button">필터 초기화</button>
+            </div>
+          </div>
+
           <div class="selection-bar">
             <div id="selectionMeta" class="selection-meta">선택된 이미지 0장</div>
             <div class="inline-actions wrap">

@@ -11,6 +11,10 @@ const state = {
   galleryTotalCount: 0,
   galleryPage: 1,
   galleryPageSize: 100,
+  galleryFilters: {
+    state: "ALL",
+    multiplicity: "ALL",
+  },
   selectedImageIds: new Set(),
   imageMetaCache: new Map(),
   inspectedImageId: null,
@@ -400,6 +404,28 @@ function inferCardState(item) {
   return "unreviewed";
 }
 
+function inferCardMultiplicity(item) {
+  const instanceCount = Number(item?.instance_count || 0);
+  return instanceCount > 1 ? "MULTI" : "SINGLE";
+}
+
+function filteredGalleryItems() {
+  return state.originalGalleryItems.filter((item) => {
+    const cardState = inferCardState(item).toUpperCase();
+    const multiplicity = inferCardMultiplicity(item);
+    if (state.galleryFilters.state !== "ALL" && cardState !== state.galleryFilters.state) return false;
+    if (state.galleryFilters.multiplicity !== "ALL" && multiplicity !== state.galleryFilters.multiplicity) return false;
+    return true;
+  });
+}
+
+function syncGalleryFilterControls() {
+  const stateFilter = el("galleryStateFilter");
+  const multiplicityFilter = el("galleryMultiplicityFilter");
+  if (stateFilter) stateFilter.value = state.galleryFilters.state;
+  if (multiplicityFilter) multiplicityFilter.value = state.galleryFilters.multiplicity;
+}
+
 function inferInstanceState(inst) {
   const status = String(inst.assignment_status || "").toUpperCase();
   if (status === "ACCEPTED") return "accepted";
@@ -750,15 +776,16 @@ function setActiveInspectorInstance(pane, instanceId) {
 
 function renderGallery() {
   const grid = el("galleryGrid");
-  const meta = el("galleryMeta");
   grid.innerHTML = "";
+  const filteredItems = filteredGalleryItems();
   const pageSize = Math.max(1, Number(state.galleryPageSize || 100));
-  const visibleStart = state.originalGalleryItems.length ? ((state.galleryPage - 1) * pageSize) + 1 : 0;
-  const visibleEnd = state.originalGalleryItems.length ? ((state.galleryPage - 1) * pageSize) + state.galleryItems.length : 0;
-  const totalText = state.galleryTotalCount > 0 ? `${visibleStart}-${visibleEnd}/${state.galleryTotalCount}` : `${state.galleryItems.length}`;
-  const summaryText = `${totalText} images · view=${state.galleryView}${state.activePetId ? ` · pet=${state.activePetId}` : ""}`;
+  const visibleStart = filteredItems.length ? ((state.galleryPage - 1) * pageSize) + 1 : 0;
+  const visibleEnd = filteredItems.length ? ((state.galleryPage - 1) * pageSize) + state.galleryItems.length : 0;
+  const filteredText = filteredItems.length ? `${visibleStart}-${visibleEnd}/${filteredItems.length}` : `${state.galleryItems.length}`;
+  const summaryText = `${filteredText} filtered · total=${state.galleryTotalCount} · view=${state.galleryView}${state.activePetId ? ` · pet=${state.activePetId}` : ""}`;
   el("selectionMeta").textContent = selectedCountText();
   syncSelectionActionButtons();
+  syncGalleryFilterControls();
   renderGalleryPagination(summaryText);
 
   if (!state.galleryItems.length) {
@@ -774,7 +801,7 @@ function renderGallery() {
     const petLabel = Array.isArray(item.pet_ids) && item.pet_ids.length > 0 ? item.pet_ids.join(", ") : "미지정";
     const cardState = inferCardState(item);
     const instanceCount = Number(item.instance_count || 0);
-    const multiplicity = instanceCount > 1 ? "MULTI" : "SINGLE";
+    const multiplicity = inferCardMultiplicity(item);
     card.innerHTML = `
       <div class="gallery-thumb-wrap">
         <input class="card-check" type="checkbox" ${selected ? "checked" : ""} data-image-id="${item.image_id}" />
@@ -1194,17 +1221,18 @@ function syncViewButtons() {
 }
 
 function applyGalleryPageSlice() {
+  const items = filteredGalleryItems();
   const pageSize = Math.max(1, Number(state.galleryPageSize || 100));
-  const totalPages = Math.max(1, Math.ceil(state.originalGalleryItems.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
   state.galleryPage = Math.min(Math.max(1, Number(state.galleryPage || 1)), totalPages);
   const start = (state.galleryPage - 1) * pageSize;
-  state.galleryItems = state.originalGalleryItems.slice(start, start + pageSize);
+  state.galleryItems = items.slice(start, start + pageSize);
 }
 
 function renderGalleryPagination(summaryText) {
   const box = el("galleryMeta");
   if (!box) return;
-  const totalItems = state.originalGalleryItems.length;
+  const totalItems = filteredGalleryItems().length;
   const pageSize = Math.max(1, Number(state.galleryPageSize || 100));
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
 
@@ -1867,6 +1895,28 @@ function bindEvents() {
   el("btnClearSelection").addEventListener("click", () => {
     clearSelectedImages();
     log("Cleared selected images");
+  });
+
+  el("galleryStateFilter")?.addEventListener("change", () => {
+    state.galleryFilters.state = value("galleryStateFilter") || "ALL";
+    state.galleryPage = 1;
+    applyGalleryPageSlice();
+    renderGallery();
+  });
+
+  el("galleryMultiplicityFilter")?.addEventListener("change", () => {
+    state.galleryFilters.multiplicity = value("galleryMultiplicityFilter") || "ALL";
+    state.galleryPage = 1;
+    applyGalleryPageSlice();
+    renderGallery();
+  });
+
+  el("btnResetGalleryFilters")?.addEventListener("click", () => {
+    state.galleryFilters.state = "ALL";
+    state.galleryFilters.multiplicity = "ALL";
+    state.galleryPage = 1;
+    applyGalleryPageSlice();
+    renderGallery();
   });
 
   el("btnAssignSelected").addEventListener("click", async () => {
