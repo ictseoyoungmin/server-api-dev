@@ -14,6 +14,7 @@ const state = {
   galleryFilters: {
     state: "ALL",
     multiplicity: "ALL",
+    petId: "",
   },
   selectedImageIds: new Set(),
   imageMetaCache: new Map(),
@@ -413,8 +414,18 @@ function filteredGalleryItems() {
   return state.originalGalleryItems.filter((item) => {
     const cardState = inferCardState(item).toUpperCase();
     const multiplicity = inferCardMultiplicity(item);
+    const petIds = Array.isArray(item.pet_ids) ? item.pet_ids.map((petId) => String(petId || "").trim()).filter(Boolean) : [];
+    const targetPetQuery = String(state.galleryFilters.petId || "").trim().toLowerCase();
+    const petTokens = petIds.flatMap((petId) => {
+      const petName = petDisplayNameById(petId);
+      return [String(petId || "").trim().toLowerCase(), String(petName || "").trim().toLowerCase()].filter(Boolean);
+    });
+    const hasTargetPet = targetPetQuery
+      ? petTokens.some((token) => token.includes(targetPetQuery))
+      : false;
     if (state.galleryFilters.state !== "ALL" && cardState !== state.galleryFilters.state) return false;
     if (state.galleryFilters.multiplicity !== "ALL" && multiplicity !== state.galleryFilters.multiplicity) return false;
+    if (targetPetQuery && !hasTargetPet) return false;
     return true;
   });
 }
@@ -422,8 +433,24 @@ function filteredGalleryItems() {
 function syncGalleryFilterControls() {
   const stateFilter = el("galleryStateFilter");
   const multiplicityFilter = el("galleryMultiplicityFilter");
+  const petFilter = el("galleryPetFilter");
+  const petFilterList = el("galleryPetFilterList");
   if (stateFilter) stateFilter.value = state.galleryFilters.state;
   if (multiplicityFilter) multiplicityFilter.value = state.galleryFilters.multiplicity;
+  if (petFilter) petFilter.value = String(state.galleryFilters.petId || "");
+  if (petFilterList) {
+    const options = [];
+    state.pets.forEach((pet) => {
+      const petId = String(pet.pet_id || "").trim();
+      const petName = String(pet.pet_name || pet.pet_id || "").trim() || petId;
+      if (!petId) return;
+      options.push(`<option value="${escapeHtml(petName)}"></option>`);
+      if (petName !== petId) {
+        options.push(`<option value="${escapeHtml(petId)}"></option>`);
+      }
+    });
+    petFilterList.innerHTML = options.join('');
+  }
 }
 
 function inferInstanceState(inst) {
@@ -1911,9 +1938,20 @@ function bindEvents() {
     renderGallery();
   });
 
+  const applyPetFilter = () => {
+    state.galleryFilters.petId = value("galleryPetFilter") || "";
+    state.galleryPage = 1;
+    applyGalleryPageSlice();
+    renderGallery();
+  };
+
+  el("galleryPetFilter")?.addEventListener("change", applyPetFilter);
+  el("galleryPetFilter")?.addEventListener("input", applyPetFilter);
+
   el("btnResetGalleryFilters")?.addEventListener("click", () => {
     state.galleryFilters.state = "ALL";
     state.galleryFilters.multiplicity = "ALL";
+    state.galleryFilters.petId = "";
     state.galleryPage = 1;
     applyGalleryPageSlice();
     renderGallery();
