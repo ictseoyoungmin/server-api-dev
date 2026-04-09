@@ -665,16 +665,39 @@ h2 {
 }
 
 .view-tabs {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 0;
+  padding: 4px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(88, 72, 34, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+  overflow: hidden;
 }
 
-.tab.active {
-  background: rgba(19, 95, 87, 0.14);
-  border-color: rgba(19, 95, 87, 0.35);
+.view-tabs .tab {
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+  min-width: 0;
+  padding: 10px 16px;
+}
+
+.view-tabs .tab:hover {
+  background: rgba(19, 95, 87, 0.08);
   color: var(--teal);
-  box-shadow: inset 0 0 0 1px rgba(19, 95, 87, 0.18);
+}
+
+.view-tabs .tab.active,
+.view-tabs .tab.is-active {
+  background: var(--teal);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(19, 95, 87, 0.22);
 }
 
 .search-controls {
@@ -1368,6 +1391,7 @@ body.inspector-open {
     align-items: stretch;
   }
 
+  .view-tabs,
   .search-controls,
   .gallery-filter-controls {
     width: 100%;
@@ -1412,6 +1436,16 @@ body.inspector-open {
   .gallery-filter-controls {
     grid-template-columns: 1fr;
     display: grid;
+  }
+
+  .view-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .view-tabs .tab {
+    width: 100%;
+    justify-content: center;
   }
 
   .gallery-grid {
