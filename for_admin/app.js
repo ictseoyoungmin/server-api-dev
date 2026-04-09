@@ -15,6 +15,8 @@ const state = {
   activeExemplars: [],
   lastBucketManifest: null,
   bucketSummary: null,
+  calendarMonth: null,
+  calendarCounts: {},
   singleSeedMode: "append",
   folderSeedPolicy: "append",
   seedContextTarget: null,
@@ -41,9 +43,143 @@ function currentDate() {
   return value("workspaceDate").trim();
 }
 
+function renderWorkspaceDateDisplay() {
+  const display = el("workspaceDateDisplay");
+  const toggle = el("btnWorkspaceDateToggle");
+  const value = currentDate();
+  if (display) display.textContent = value || "날짜 선택";
+  if (toggle) toggle.setAttribute("aria-expanded", isWorkspaceCalendarOpen() ? "true" : "false");
+}
+
+function isWorkspaceCalendarOpen() {
+  const popover = el("workspaceCalendarPopover");
+  return !!popover && !popover.hidden;
+}
+
+function closeWorkspaceCalendar() {
+  const popover = el("workspaceCalendarPopover");
+  const toggle = el("btnWorkspaceDateToggle");
+  const panel = el("workspacePanel");
+  if (popover) popover.hidden = true;
+  if (toggle) toggle.setAttribute("aria-expanded", "false");
+  if (panel) panel.classList.remove("is-calendar-open");
+}
+
+function toggleWorkspaceCalendar() {
+  const popover = el("workspaceCalendarPopover");
+  const toggle = el("btnWorkspaceDateToggle");
+  const panel = el("workspacePanel");
+  if (!popover) return;
+  const next = popover.hidden;
+  popover.hidden = !next;
+  if (toggle) toggle.setAttribute("aria-expanded", next ? "true" : "false");
+  if (panel) panel.classList.toggle("is-calendar-open", next);
+}
+
 function workspaceCapturedAt() {
   const date = currentDate();
   return date ? `${date}T12:00:00` : "";
+}
+
+function monthKeyFromDate(dateStr) {
+  const raw = String(dateStr || "").trim();
+  return raw ? raw.slice(0, 7) : "";
+}
+
+function parseMonthKey(monthKey) {
+  const raw = String(monthKey || "").trim();
+  const match = raw.match(/^(\d{4})-(\d{2})$/);
+  if (!match) return null;
+  return { year: Number(match[1]), month: Number(match[2]) };
+}
+
+function shiftMonthKey(monthKey, delta) {
+  const parsed = parseMonthKey(monthKey);
+  if (!parsed) return monthKeyFromDate(new Date().toISOString().slice(0, 10));
+  const dt = new Date(Date.UTC(parsed.year, parsed.month - 1 + Number(delta || 0), 1));
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function formatMonthLabel(monthKey) {
+  const parsed = parseMonthKey(monthKey);
+  if (!parsed) return "-";
+  return `${parsed.year}.${String(parsed.month).padStart(2, "0")}`;
+}
+
+function daysInMonth(monthKey) {
+  const parsed = parseMonthKey(monthKey);
+  if (!parsed) return 30;
+  return new Date(Date.UTC(parsed.year, parsed.month, 0)).getUTCDate();
+}
+
+function weekdayOfMonthStart(monthKey) {
+  const parsed = parseMonthKey(monthKey);
+  if (!parsed) return 0;
+  return new Date(Date.UTC(parsed.year, parsed.month - 1, 1)).getUTCDay();
+}
+
+async function loadCalendarMonth(monthKey = state.calendarMonth) {
+  const target = String(monthKey || "").trim() || monthKeyFromDate(currentDate()) || monthKeyFromDate(new Date().toISOString().slice(0, 10));
+  state.calendarMonth = target;
+  try {
+    const data = await api(`/images/calendar${toQuery({ month: target })}`);
+    state.calendarCounts = Object.fromEntries((data.days || []).map((item) => [item.date, Number(item.count || 0)]));
+  } catch (err) {
+    state.calendarCounts = {};
+    log("Calendar month load failed", { month: target, error: err.message || String(err) });
+  }
+  renderWorkspaceCalendar();
+}
+
+function renderWorkspaceCalendar() {
+  renderWorkspaceDateDisplay();
+  const grid = el("calendarGrid");
+  const label = el("calendarMonthLabel");
+  if (!grid || !label) return;
+  const monthKey = String(state.calendarMonth || monthKeyFromDate(currentDate()) || "").trim();
+  label.textContent = formatMonthLabel(monthKey);
+  const selectedDate = currentDate();
+  const today = new Date().toISOString().slice(0, 10);
+  const totalDays = daysInMonth(monthKey);
+  const offset = weekdayOfMonthStart(monthKey);
+  const cells = [];
+  for (let i = 0; i < offset; i += 1) {
+    cells.push('<div class="workspace-calendar-cell empty" aria-hidden="true"></div>');
+  }
+  for (let day = 1; day <= totalDays; day += 1) {
+    const date = `${monthKey}-${String(day).padStart(2, "0")}`;
+    const count = Number(state.calendarCounts?.[date] || 0);
+    const classes = ["workspace-calendar-cell"];
+    if (count > 0) classes.push("has-count");
+    if (date === selectedDate) classes.push("is-selected");
+    if (date === today) classes.push("is-today");
+    cells.push(`
+      <div class="${classes.join(" ")}">
+        <button type="button" class="workspace-calendar-button" data-calendar-date="${date}">
+          <span class="workspace-calendar-day">${day}</span>
+          ${count > 0 ? `<span class="workspace-calendar-count">${count}</span>` : `<span class="workspace-calendar-count">&nbsp;</span>`}
+        </button>
+      </div>
+    `);
+  }
+  grid.innerHTML = cells.join("");
+  grid.querySelectorAll("[data-calendar-date]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const nextDate = String(btn.dataset.calendarDate || "").trim();
+      if (!nextDate) return;
+      el("workspaceDate").value = nextDate;
+      state.calendarMonth = monthKeyFromDate(nextDate);
+      resetBucketExportState();
+      closeWorkspaceCalendar();
+      renderWorkspaceCalendar();
+      try {
+        await loadWorkspace();
+      } catch (err) {
+        alert(err.message || String(err));
+        log("Load workspace failed", { error: err.message || String(err) });
+      }
+    });
+  });
 }
 
 function apiBase() {
@@ -1116,8 +1252,12 @@ async function loadBucketSummary() {
 
 async function loadWorkspace() {
   el("workspaceMeta").textContent = `${currentDate() ? `${currentDate()}` : ""}`;
+  const monthKey = monthKeyFromDate(currentDate());
+  if (monthKey && state.calendarMonth !== monthKey) {
+    state.calendarMonth = monthKey;
+  }
   await Promise.all([loadPets(), state.activePetId ? loadActiveExemplars() : Promise.resolve()]);
-  await Promise.all([loadGallery(), loadBucketSummary()]);
+  await Promise.all([loadGallery(), loadBucketSummary(), loadCalendarMonth(state.calendarMonth)]);
 }
 
 async function autoClassify() {
@@ -1339,6 +1479,9 @@ function bindHelpPopovers() {
     if (!event.target.closest("#dailyDownloadMenu") && !event.target.closest("#btnDownloadDailyZip")) {
       closeDailyDownloadMenu();
     }
+    if (!event.target.closest("#workspaceDatePicker")) {
+      closeWorkspaceCalendar();
+    }
   });
 }
 
@@ -1365,6 +1508,9 @@ function bootstrapDefaults() {
   el("apiBase").value = `${window.location.origin}/v1`;
   const today = new Date().toISOString().slice(0, 10);
   el("workspaceDate").value = today;
+  state.calendarMonth = monthKeyFromDate(today);
+  closeWorkspaceCalendar();
+  renderWorkspaceDateDisplay();
   const zipButton = el("btnDownloadZip");
   if (zipButton) {
     zipButton.disabled = false;
@@ -1374,8 +1520,30 @@ function bootstrapDefaults() {
 }
 
 function bindEvents() {
-  el("workspaceDate").addEventListener("change", () => {
+  el("btnWorkspaceDateToggle")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleWorkspaceCalendar();
+  });
+
+  el("workspaceDate").addEventListener("change", async () => {
     resetBucketExportState();
+    const monthKey = monthKeyFromDate(currentDate());
+    if (monthKey) {
+      state.calendarMonth = monthKey;
+      await loadCalendarMonth(monthKey);
+    } else {
+      renderWorkspaceCalendar();
+    }
+  });
+
+  el("btnCalendarPrevMonth")?.addEventListener("click", async () => {
+    state.calendarMonth = shiftMonthKey(state.calendarMonth || monthKeyFromDate(currentDate()), -1);
+    await loadCalendarMonth(state.calendarMonth);
+  });
+
+  el("btnCalendarNextMonth")?.addEventListener("click", async () => {
+    state.calendarMonth = shiftMonthKey(state.calendarMonth || monthKeyFromDate(currentDate()), 1);
+    await loadCalendarMonth(state.calendarMonth);
   });
 
   el("btnLoadWorkspace").addEventListener("click", async () => {

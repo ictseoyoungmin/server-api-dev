@@ -1424,3 +1424,222 @@ body.inspector-open {
 .action-help-group {
   position: relative;
 }
+
+
+#workspaceDate {
+  display: none;
+}
+
+#workspacePanel {
+  position: relative;
+  z-index: 1;
+}
+
+#workspacePanel.is-calendar-open {
+  z-index: 90;
+}
+
+.workspace-date-picker {
+  position: relative;
+  margin-top: 2px;
+}
+
+.workspace-date-trigger {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 2px 10px;
+  min-height: 72px;
+  padding: 11px 14px 10px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.82);
+  text-align: left;
+}
+
+.workspace-date-trigger::after {
+  content: "\25be";
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  font-size: 13px;
+  color: var(--muted);
+  transition: transform 120ms ease;
+}
+
+.workspace-date-trigger[aria-expanded="true"]::after {
+  transform: rotate(180deg);
+}
+
+.workspace-date-trigger:hover {
+  transform: none;
+}
+
+.workspace-date-trigger-label,
+.workspace-calendar-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.workspace-date-trigger-label {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.workspace-date-trigger strong,
+.workspace-calendar-head strong {
+  display: block;
+  font-size: 1rem;
+  line-height: 1.2;
+  font-family: "IBM Plex Sans KR", "Pretendard", "Noto Sans KR", sans-serif;
+}
+
+.workspace-date-trigger strong {
+  grid-column: 1;
+  grid-row: 2;
+  font-weight: 600;
+}
+
+.workspace-calendar-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: auto;
+  width: min(320px, calc(100vw - 72px));
+  z-index: 120;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(255,248,238,0.94));
+  box-shadow: var(--shadow);
+}
+
+.workspace-calendar-popover[hidden] {
+  display: none;
+}
+
+.workspace-calendar-head {
+  display: grid;
+  grid-template-columns: 40px 1fr 40px;
+  align-items: center;
+  gap: 10px;
+}
+
+.workspace-calendar-head > div {
+  display: grid;
+  gap: 3px;
+  align-items: center;
+  justify-items: center;
+  text-align: center;
+}
+
+.workspace-calendar-head button {
+  min-height: 38px;
+  padding: 8px 0;
+  border-radius: 12px;
+}
+
+.workspace-calendar-weekdays,
+.workspace-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.workspace-calendar-weekdays span {
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.workspace-calendar-grid {
+  min-height: 300px;
+}
+
+.workspace-calendar-cell {
+  min-height: 64px;
+  border-radius: 16px;
+  border: 1px solid rgba(80, 68, 45, 0.08);
+  background: rgba(255,255,255,0.72);
+}
+
+.workspace-calendar-cell.empty {
+  background: transparent;
+  border-style: dashed;
+  opacity: 0.18;
+}
+
+.workspace-calendar-button {
+  width: 100%;
+  height: 100%;
+  min-height: 64px;
+  border: 0;
+  background: transparent;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  justify-items: center;
+  align-items: center;
+  padding: 8px 6px;
+  border-radius: 16px;
+  box-shadow: none;
+}
+
+.workspace-calendar-button:hover {
+  transform: none;
+  box-shadow: none;
+  background: rgba(19, 95, 87, 0.08);
+}
+
+.workspace-calendar-day {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  text-align: center;
+}
+
+.workspace-calendar-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: end;
+  justify-self: center;
+  min-width: 24px;
+  max-width: 100%;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(19, 95, 87, 0.12);
+  color: var(--teal);
+  font-size: 10px;
+  line-height: 1.1;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-calendar-cell.has-count {
+  border-color: rgba(19, 95, 87, 0.18);
+}
+
+.workspace-calendar-cell.is-selected {
+  border-color: rgba(19, 95, 87, 0.42);
+  background: rgba(217, 241, 237, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(19, 95, 87, 0.22);
+}
+
+.workspace-calendar-cell.is-selected .workspace-calendar-day {
+  color: var(--teal);
+}
+
+.workspace-calendar-cell.is-today:not(.is-selected) .workspace-calendar-day {
+  color: var(--amber);
+}

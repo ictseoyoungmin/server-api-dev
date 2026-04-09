@@ -37,3 +37,13 @@ class ImageDeleteResponse(BaseModel):
     image_id: str
     deleted_points: int = 0
     deleted_files: bool = False
+
+
+class CalendarDayCountItem(BaseModel):
+    date: str
+    count: int = 0
+
+
+class ImagesCalendarResponse(BaseModel):
+    month: str
+    days: List[CalendarDayCountItem]

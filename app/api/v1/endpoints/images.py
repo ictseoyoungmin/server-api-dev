@@ -19,7 +19,7 @@ from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
-from app.schemas.images import GalleryImageItem, ImageDeleteResponse, ImageMetaResponse, ImagesListResponse
+from app.schemas.images import CalendarDayCountItem, GalleryImageItem, ImageDeleteResponse, ImageMetaResponse, ImagesCalendarResponse, ImagesListResponse
 from app.schemas.ingest import BBox, InstanceOut
 from app.vector_db.qdrant_store import QdrantStore, build_filter
 from app.utils.pet_registry import read_pet_name_map
@@ -226,6 +226,24 @@ def _day_range_ts(day: date_type) -> tuple[int, int]:
     return int(start_utc.timestamp()), int(end_utc.timestamp())
 
 
+def _month_start(month: str) -> date_type:
+    try:
+        return datetime.strptime(month, "%Y-%m").date().replace(day=1)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid month: {month}. Expected YYYY-MM") from exc
+
+
+def _meta_business_day(meta: dict) -> Optional[date_type]:
+    img = meta.get("image") or {}
+    ts = img.get("captured_at_ts") or img.get("uploaded_at_ts")
+    try:
+        if ts is None:
+            return None
+        return datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(business_tz()).date()
+    except Exception:
+        return None
+
+
 def _build_item_from_db(image_id: str, agg: dict, meta: Optional[dict]) -> GalleryImageItem:
     pet_ids = sorted([str(x).strip() for x in (agg.get("pet_hits") or set()) if str(x).strip()])
     if meta is not None:
@@ -294,6 +312,38 @@ def _entry_from_meta(meta: dict) -> Optional[dict]:
         "has_unclassified": _is_unclassified(meta),
         "pet_hits": set(pet_hits),
     }
+
+
+@router.get("/images/calendar", response_model=ImagesCalendarResponse)
+async def images_calendar(
+    month: str = Query(..., description="Business timezone month filter (YYYY-MM)"),
+):
+    month_start = _month_start(month)
+    if month_start.month == 12:
+        next_month = month_start.replace(year=month_start.year + 1, month=1, day=1)
+    else:
+        next_month = month_start.replace(month=month_start.month + 1, day=1)
+
+    counts: Dict[str, int] = {}
+    meta_dir = Path(settings.reid_storage_dir) / "meta"
+    if meta_dir.exists():
+        for meta_path in meta_dir.glob("img_*.json"):
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            img = meta.get("image") or {}
+            role = str(img.get("image_role") or "DAILY").upper()
+            if role != "DAILY":
+                continue
+            biz_day = _meta_business_day(meta)
+            if biz_day is None or biz_day < month_start or biz_day >= next_month:
+                continue
+            key = biz_day.isoformat()
+            counts[key] = counts.get(key, 0) + 1
+
+    items = [CalendarDayCountItem(date=day, count=count) for day, count in sorted(counts.items())]
+    return ImagesCalendarResponse(month=month_start.strftime("%Y-%m"), days=items)
 
 
 @router.get("/images", response_model=ImagesListResponse)

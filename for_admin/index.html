@@ -18,13 +18,31 @@
 
     <main class="dashboard">
       <aside class="sidebar">
-        <section class="panel">
+        <section class="panel" id="workspacePanel">
           <div class="panel-head">
             <h2>Workspace</h2>
             <button id="btnLoadWorkspace" class="primary">불러오기</button>
           </div>
-          <div class="grid one">
-            <label>Date<input id="workspaceDate" type="date" /></label>
+          <input id="workspaceDate" type="hidden" />
+          <div class="workspace-date-picker" id="workspaceDatePicker">
+            <button id="btnWorkspaceDateToggle" type="button" class="workspace-date-trigger" aria-expanded="false" aria-controls="workspaceCalendarPopover">
+              <span class="workspace-date-trigger-label">DATE</span>
+              <strong id="workspaceDateDisplay">-</strong>
+            </button>
+            <div id="workspaceCalendarPopover" class="workspace-calendar-popover" hidden>
+              <div class="workspace-calendar-head">
+                <button id="btnCalendarPrevMonth" type="button" aria-label="이전 달">&lt;</button>
+                <div>
+                  <div class="workspace-calendar-label">Date</div>
+                  <strong id="calendarMonthLabel">-</strong>
+                </div>
+                <button id="btnCalendarNextMonth" type="button" aria-label="다음 달">&gt;</button>
+              </div>
+              <div class="workspace-calendar-weekdays">
+                <span>일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span>토</span>
+              </div>
+              <div id="calendarGrid" class="workspace-calendar-grid"></div>
+            </div>
           </div>
           <div id="workspaceMeta" class="meta"></div>
         </section>
